@@ -119,6 +119,7 @@ const secondaryLanguages = languages.filter(language => language !== primaryLang
 const emptyAssets = (): Record<AssetKind, Asset[]> => ({ Image: [], Audio: [], Video: [] });
 const supportedImageExtensions = new Set(["png", "svg", "jpg", "jpeg", "webp"]);
 const imageUploadAccept = ".png,.svg,.jpg,.jpeg,.webp,image/png,image/svg+xml,image/jpeg,image/webp";
+let uploadTimestampCounter = 0;
 
 function emptyProject(id: string, name: string): Project {
   return { id, name, assets: emptyAssets(), audioLocalization: [], textLocalization: [] };
@@ -183,12 +184,19 @@ function mapProjectPayload(data: any): Project {
   };
 }
 
-function uploadName(fileName: string, kind: AssetKind) {
+function uploadTimestampToken() {
+  uploadTimestampCounter = (uploadTimestampCounter + 1) % 1296;
+  return `${Date.now().toString(36)}${uploadTimestampCounter.toString(36).padStart(2, "0")}`;
+}
+
+function defaultAssetKey(kind: AssetKind) {
+  return `${kind.toLowerCase()}-${uploadTimestampToken()}`;
+}
+
+function uploadName(_fileName: string, kind: AssetKind) {
   const extension = kind === "Image" ? "webp" : kind === "Video" ? "webm" : "ogg";
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  const hash = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
-  return `${hash}.${extension}`;
+  const prefix = kind === "Image" ? "i" : kind === "Video" ? "v" : "a";
+  return `${prefix}-${uploadTimestampToken()}.${extension}`;
 }
 
 function imageExtension(fileName: string) {
@@ -566,6 +574,7 @@ export function App() {
             body: JSON.stringify({
               originalName: originalFile.name,
               name: kind === "Image" ? normalizedFile.name : uploadName(originalFile.name, kind),
+              key: defaultAssetKey(kind),
               kind,
               sizeBytes: normalizedFile.size,
               mimeType: normalizedFile.type,
@@ -709,6 +718,7 @@ export function App() {
         body: JSON.stringify({
           originalName: file.name,
           name: assetName,
+          key: defaultAssetKey("Audio"),
           kind: "Audio",
           sizeBytes: file.size,
           mimeType: file.type,

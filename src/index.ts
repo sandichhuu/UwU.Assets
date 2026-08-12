@@ -56,6 +56,7 @@ const localizationKinds = new Set<LocalizationKind>(["audioLocalization", "textL
 const assetStoragePathEnvName = "ASSET_STORAGE_PATH";
 const configuredAssetStoragePath = Bun.env[assetStoragePathEnvName]?.trim();
 const defaultAssetPageSize = 50;
+let uploadTimestampCounter = 0;
 
 if (!configuredAssetStoragePath) {
   throw new Error(`${assetStoragePathEnvName} must be set to a directory path before starting the server.`);
@@ -82,6 +83,21 @@ function webmAssetName(name: string) {
 
 function sourceVideoAssetName(name: string) {
   return `${name}.source`;
+}
+
+function uploadTimestampToken() {
+  uploadTimestampCounter = (uploadTimestampCounter + 1) % 1296;
+  return `${Date.now().toString(36)}${uploadTimestampCounter.toString(36).padStart(2, "0")}`;
+}
+
+function defaultAssetKey(kind: AssetKind) {
+  return `${kind.toLowerCase()}-${uploadTimestampToken()}`;
+}
+
+function defaultAssetName(kind: AssetKind) {
+  const extension = kind === "Image" ? "webp" : kind === "Video" ? "webm" : "ogg";
+  const prefix = kind === "Image" ? "i" : kind === "Video" ? "v" : "a";
+  return `${prefix}-${uploadTimestampToken()}.${extension}`;
 }
 
 function isSafeAssetName(name: string) {
@@ -597,6 +613,7 @@ const server = serve({
           originalName?: string;
           name?: string;
           kind?: AssetKind;
+          key?: string;
           sizeBytes?: number;
           mimeType?: string;
           contentBase64?: string;
@@ -604,7 +621,7 @@ const server = serve({
           metadata?: string[];
         };
 
-        const requestedAssetName = body.name?.trim();
+        const requestedAssetName = body.name?.trim() || (body.kind && assetKinds.has(body.kind) ? defaultAssetName(body.kind) : "");
         const assetName =
           body.kind === "Audio" && requestedAssetName
             ? oggAssetName(requestedAssetName)
@@ -632,6 +649,7 @@ const server = serve({
           projectId: project.id,
           originalName: body.originalName.trim(),
           name: assetName,
+          key: body.key?.trim() || defaultAssetKey(body.kind),
           kind: body.kind,
           sizeBytes: assetContent.byteLength,
           mimeType,
