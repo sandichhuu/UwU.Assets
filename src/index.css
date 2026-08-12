@@ -429,7 +429,7 @@ h2 {
 
 .asset-row {
   display: grid;
-  grid-template-columns: 72px minmax(360px, 1fr) minmax(260px, 320px) minmax(172px, auto);
+  grid-template-columns: 72px minmax(300px, 1fr) minmax(220px, 280px) minmax(240px, 300px) minmax(172px, auto);
   gap: 16px;
   align-items: center;
   padding: 14px 18px;
@@ -437,11 +437,11 @@ h2 {
 }
 
 .image-asset-row {
-  grid-template-columns: 72px minmax(420px, 1fr) 82px minmax(260px, 320px) minmax(172px, auto);
+  grid-template-columns: 72px minmax(320px, 1fr) minmax(220px, 280px) 82px minmax(240px, 300px) minmax(172px, auto);
 }
 
 .video-asset-row {
-  grid-template-columns: 72px minmax(360px, 1fr) minmax(140px, 180px) minmax(260px, 320px) minmax(172px, auto);
+  grid-template-columns: 72px minmax(280px, 1fr) minmax(220px, 280px) minmax(140px, 180px) minmax(240px, 300px) minmax(172px, auto);
 }
 
 .table-head {
@@ -560,6 +560,36 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.asset-key-cell {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.asset-key-cell code {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid hsl(207 60% 90%);
+  border-radius: 8px;
+  background: hsl(207 100% 98%);
+  color: #435466;
+  padding: 8px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-key-input {
+  min-width: 0;
+  height: 36px;
+}
+
+.asset-key-tools {
+  gap: 6px;
+  flex-wrap: nowrap;
 }
 
 .metadata-list {
@@ -1172,16 +1202,16 @@ h2 {
   }
 
   .asset-row {
-    grid-template-columns: 52px minmax(300px, 1fr) minmax(220px, 280px) minmax(172px, auto);
+    grid-template-columns: 52px minmax(260px, 1fr) minmax(200px, 260px) minmax(220px, 280px) minmax(172px, auto);
     padding: 12px;
   }
 
   .image-asset-row {
-    grid-template-columns: 52px minmax(320px, 1fr) 70px minmax(220px, 280px) minmax(172px, auto);
+    grid-template-columns: 52px minmax(260px, 1fr) minmax(200px, 260px) 70px minmax(220px, 280px) minmax(172px, auto);
   }
 
   .video-asset-row {
-    grid-template-columns: 52px minmax(300px, 1fr) minmax(130px, 170px) minmax(220px, 280px) minmax(172px, auto);
+    grid-template-columns: 52px minmax(240px, 1fr) minmax(200px, 260px) minmax(130px, 170px) minmax(220px, 280px) minmax(172px, auto);
   }
 
   .image-preview {

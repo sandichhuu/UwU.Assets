@@ -86,12 +86,16 @@ function ensureAssetConversionColumns(db: Database) {
   if (!names.has("conversion_status")) {
     db.run("ALTER TABLE assets ADD COLUMN conversion_status TEXT NOT NULL DEFAULT 'ready';");
   }
+  if (!names.has("asset_key")) {
+    db.run("ALTER TABLE assets ADD COLUMN asset_key TEXT NOT NULL DEFAULT '';");
+  }
   if (!names.has("conversion_progress")) {
     db.run("ALTER TABLE assets ADD COLUMN conversion_progress INTEGER NOT NULL DEFAULT 100;");
   }
   if (!names.has("conversion_error")) {
     db.run("ALTER TABLE assets ADD COLUMN conversion_error TEXT NOT NULL DEFAULT '';");
   }
+  db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_asset_key ON assets(asset_key) WHERE asset_key <> '';");
 }
 
 function ensureAuthTables(db: Database) {

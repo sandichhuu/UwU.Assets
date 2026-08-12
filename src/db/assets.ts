@@ -9,6 +9,7 @@ export type AssetRecord = {
   projectId: string;
   originalName: string;
   name: string;
+  key: string;
   kind: AssetKind;
   sizeBytes: number;
   mimeType: string;
@@ -70,6 +71,7 @@ type AssetRow = {
   project_id: string;
   original_name: string;
   name: string;
+  asset_key: string;
   kind: AssetKind;
   size_bytes: number;
   mime_type: string;
@@ -138,13 +140,13 @@ const deleteProjectQuery = db.query(`
 `);
 
 const insertAsset = db.query(`
-  INSERT INTO assets (id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error)
-  VALUES ($id, $projectId, $originalName, $name, $kind, $sizeBytes, $mimeType, $metadataJson, $conversionStatus, $conversionProgress, $conversionError)
-  RETURNING id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+  INSERT INTO assets (id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error)
+  VALUES ($id, $projectId, $originalName, $name, $key, $kind, $sizeBytes, $mimeType, $metadataJson, $conversionStatus, $conversionProgress, $conversionError)
+  RETURNING id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
 `);
 
 const listAssetsQuery = db.query(`
-  SELECT id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+  SELECT id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
   FROM assets
   WHERE project_id = $projectId
     AND ($kind IS NULL OR kind = $kind)
@@ -153,13 +155,19 @@ const listAssetsQuery = db.query(`
 `);
 
 const getAssetByIdQuery = db.query(`
-  SELECT id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+  SELECT id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
   FROM assets
   WHERE id = $id
 `);
 
+const getAssetByKeyQuery = db.query(`
+  SELECT id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+  FROM assets
+  WHERE asset_key = $key
+`);
+
 const getAssetByNameQuery = db.query(`
-  SELECT id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+  SELECT id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
   FROM assets
   WHERE name = $name
 `);
@@ -190,7 +198,15 @@ const updateAssetFileQuery = db.query(`
       conversion_error = $conversionError,
       updated_at = datetime('now')
   WHERE id = $id
-  RETURNING id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+  RETURNING id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+`);
+
+const updateAssetKeyQuery = db.query(`
+  UPDATE assets
+  SET asset_key = $key,
+      updated_at = datetime('now')
+  WHERE id = $id
+  RETURNING id, project_id, original_name, name, asset_key, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
 `);
 
 const listLocalizationQuery = db.query(`
@@ -275,6 +291,7 @@ export function createAsset(input: {
   projectId: string;
   originalName: string;
   name: string;
+  key?: string;
   kind: AssetKind;
   sizeBytes?: number;
   mimeType?: string;
@@ -289,6 +306,7 @@ export function createAsset(input: {
       projectId: input.projectId,
       originalName: input.originalName,
       name: input.name,
+      key: input.key ?? "",
       kind: input.kind,
       sizeBytes: input.sizeBytes ?? 0,
       mimeType: input.mimeType ?? "",
@@ -306,6 +324,11 @@ export function listAssets(projectId: string, kind?: AssetKind, options?: { limi
 
 export function getAssetById(id: string) {
   const row = getAssetByIdQuery.get({ id }) as AssetRow | null;
+  return row ? mapAsset(row) : null;
+}
+
+export function getAssetByKey(key: string) {
+  const row = getAssetByKeyQuery.get({ key }) as AssetRow | null;
   return row ? mapAsset(row) : null;
 }
 
@@ -352,6 +375,11 @@ export function updateAssetFile(input: {
     conversionProgress: input.conversionProgress ?? 100,
     conversionError: input.conversionError ?? "",
   }) as AssetRow | null;
+  return row ? mapAsset(row) : null;
+}
+
+export function updateAssetKey(id: string, key: string) {
+  const row = updateAssetKeyQuery.get({ id, key }) as AssetRow | null;
   return row ? mapAsset(row) : null;
 }
 
@@ -441,6 +469,7 @@ function mapAsset(row: AssetRow): AssetRecord {
     projectId: row.project_id,
     originalName: row.original_name,
     name: row.name,
+    key: row.asset_key,
     kind: row.kind,
     sizeBytes: row.size_bytes,
     mimeType: row.mime_type,

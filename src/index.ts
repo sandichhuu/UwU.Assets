@@ -10,6 +10,7 @@ import {
   deleteLocalization,
   deleteProject,
   getAssetById,
+  getAssetByKey,
   getAssetByName,
   getLocalizationById,
   getProject,
@@ -21,6 +22,7 @@ import {
   recordAuditLog,
   updateAssetConversion,
   updateAssetFile,
+  updateAssetKey,
   upsertLocalization,
   upsertProjectSettings,
   type AssetKind,
@@ -271,7 +273,7 @@ function assetPageParams(req: Request) {
 }
 
 async function assetResponse(req: Request, mode: "id" | "name", key: string) {
-  const asset = mode === "id" ? getAssetById(key) : getAssetByName(key);
+  const asset = mode === "id" ? getAssetByKey(key) ?? getAssetById(key) : getAssetByName(key);
   if (!asset) return Response.json({ error: "Asset not found" }, { status: 404 });
 
   const token = new URL(req.url).searchParams.get("token");
@@ -666,12 +668,40 @@ const server = serve({
         if (!asset) return Response.json({ error: "Asset not found" }, { status: 404 });
 
         const body = (await req.json()) as {
+          key?: string;
           originalName?: string;
           mimeType?: string;
           contentBase64?: string;
           previewContentBase64?: string;
           metadata?: string[];
         };
+        if (typeof body.key === "string" && !body.contentBase64) {
+          let updatedAsset;
+          try {
+            updatedAsset = updateAssetKey(asset.id, body.key.trim());
+          } catch (error) {
+            if (error instanceof Error && error.message.toLowerCase().includes("unique")) {
+              return Response.json({ error: "Asset KEY already exists" }, { status: 409 });
+            }
+            throw error;
+          }
+          if (!updatedAsset) return Response.json({ error: "Asset key could not be updated" }, { status: 500 });
+
+          const user = currentUser(req);
+          if (user && updatedAsset.key !== asset.key) {
+            recordAuditLog({
+              projectId: asset.projectId,
+              ...auditActor(user),
+              action: "updated asset key",
+              targetType: "asset",
+              targetId: asset.id,
+              targetName: asset.name,
+              details: { kind: asset.kind, previousKey: asset.key, nextKey: updatedAsset.key },
+            });
+          }
+
+          return Response.json({ asset: updatedAsset });
+        }
         if (!body.originalName?.trim() || !body.contentBase64) {
           return Response.json({ error: "originalName and contentBase64 are required" }, { status: 400 });
         }

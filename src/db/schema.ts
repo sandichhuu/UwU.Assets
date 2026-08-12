@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS assets (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   original_name TEXT NOT NULL,
   name TEXT NOT NULL UNIQUE,
+  asset_key TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL CHECK (kind IN ('Image', 'Audio', 'Video')),
   size_bytes INTEGER NOT NULL DEFAULT 0,
   mime_type TEXT NOT NULL DEFAULT '',
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS assets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_assets_project_kind ON assets(project_id, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_asset_key ON assets(asset_key) WHERE asset_key <> '';
 
 CREATE TABLE IF NOT EXISTS localization_entries (
   id TEXT PRIMARY KEY,

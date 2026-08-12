@@ -1,5 +1,6 @@
 import {
   ChevronDown,
+  Check,
   Copy,
   Download,
   HardDrive,
@@ -14,6 +15,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -22,6 +24,7 @@ import {
   TriangleAlert,
   Upload,
   WandSparkles,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
@@ -39,6 +42,7 @@ type Asset = {
   id: string;
   originalName: string;
   name: string;
+  key: string;
   kind: AssetKind;
   sizeBytes: number;
   mimeType: string;
@@ -147,6 +151,7 @@ function mapAssetPayload(asset: any): Asset {
     id: asset.id,
     originalName: asset.originalName,
     name: asset.name,
+    key: asset.key ?? "",
     kind: asset.kind,
     sizeBytes: asset.sizeBytes,
     mimeType: asset.mimeType,
@@ -480,7 +485,7 @@ export function App() {
   };
 
   const assetUrl = (asset: Asset, mode: "id" | "name", options?: { includeToken?: boolean }) => {
-    const key = mode === "id" ? asset.id : asset.name;
+    const key = mode === "id" ? asset.key : asset.name;
     const path = `/assets/${mode}/${encodeURIComponent(key)}`;
     const shouldIncludeToken = options?.includeToken || !authUser;
     return shouldIncludeToken ? `${location.origin}${path}?token=${encodeURIComponent(token)}` : `${location.origin}${path}`;
@@ -652,6 +657,20 @@ export function App() {
       await wait(Math.max(0, 700 - (performance.now() - startedAt)));
       setUploadProgress(null);
     }
+  };
+
+  const updateAssetKey = async (asset: Asset, key: string) => {
+    if (!activeProject) return;
+    const response = await fetch(`/api/assets/${encodeURIComponent(asset.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? `Could not update key for ${asset.name}`);
+    await loadProject(activeProject.id);
+    await refreshAuditLogsIfOpen(activeProject.id);
+    showToast.success(`Updated key for ${asset.name}`);
   };
 
   const saveLocalization = async (kind: LocalizationKind, row: LocalizationRow) => {
@@ -1039,7 +1058,7 @@ export function App() {
           ) : activeLocalizationKind ? (
             <LocalizationTable canManage={canManageAssets} kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
           ) : (
-            <AssetTable canManage={canManageAssets} assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetClipboardUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onReplace={replaceAsset} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={assetPreviewUrl} onPreview={asset => setPreviewAsset({ asset, previewUrl: assetPreviewUrl(asset), originalUrl: assetUrl(asset, "name") })} />
+            <AssetTable canManage={canManageAssets} assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetClipboardUrl(asset, mode), mode === "id" ? `Copied link by id: ${asset.key}` : `Copied link by name: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onReplace={replaceAsset} onKeyUpdate={updateAssetKey} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={assetPreviewUrl} onPreview={asset => setPreviewAsset({ asset, previewUrl: assetPreviewUrl(asset), originalUrl: assetUrl(asset, "name") })} />
           )}
         </div>
       </section>
@@ -1280,13 +1299,16 @@ function AuditLogTable({ logs, isLoading }: { logs: AuditLog[]; isLoading: boole
   );
 }
 
-function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onReplace, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; audioUrl: (asset: Asset) => string; canManage: boolean; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onReplace: (asset: Asset, file: File) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
+function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onReplace, onKeyUpdate, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; audioUrl: (asset: Asset) => string; canManage: boolean; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onReplace: (asset: Asset, file: File) => void; onKeyUpdate: (asset: Asset, key: string) => Promise<void>; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playingAssetId, setPlayingAssetId] = useState<string | null>(null);
   const [replaceTarget, setReplaceTarget] = useState<Asset | null>(null);
+  const [editingKeyAssetId, setEditingKeyAssetId] = useState<string | null>(null);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [savingKeyAssetId, setSavingKeyAssetId] = useState<string | null>(null);
   const isImageTable = assetKind === "Image";
   const isAudioTable = assetKind === "Audio";
   const isVideoTable = assetKind === "Video";
@@ -1306,7 +1328,16 @@ function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoading
     audioRef.current?.pause();
     setPlayingAssetId(null);
     setReplaceTarget(null);
+    setEditingKeyAssetId(null);
+    setKeyDraft("");
   }, [assetKind]);
+
+  useEffect(() => {
+    if (editingKeyAssetId && !assets.some(asset => asset.id === editingKeyAssetId)) {
+      setEditingKeyAssetId(null);
+      setKeyDraft("");
+    }
+  }, [assets, editingKeyAssetId]);
 
   const requestReplacement = (asset: Asset) => {
     setReplaceTarget(asset);
@@ -1344,12 +1375,34 @@ function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoading
     }
   };
 
+  const startKeyEdit = (asset: Asset) => {
+    setEditingKeyAssetId(asset.id);
+    setKeyDraft(asset.key);
+  };
+
+  const cancelKeyEdit = () => {
+    setEditingKeyAssetId(null);
+    setKeyDraft("");
+  };
+
+  const saveKeyEdit = async (asset: Asset) => {
+    setSavingKeyAssetId(asset.id);
+    try {
+      await onKeyUpdate(asset, keyDraft);
+      cancelKeyEdit();
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingKeyAssetId(null);
+    }
+  };
+
   return (
     <Card className="table-shell">
       <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div>{canManage && <div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={accept} onChange={event => onUpload(event.currentTarget.files)} /><input ref={replaceInputRef} type="file" className="hidden" accept={accept} onChange={event => replaceSelectedAsset(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div>}</div>
       <div className="data-table">
         {isAudioTable && <audio ref={audioRef} className="hidden" onEnded={() => setPlayingAssetId(null)} />}
-        <div className={isImageTable ? "asset-row image-asset-row table-head" : isVideoTable ? "asset-row video-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span>{isImageTable && <span>Preview</span>}{isVideoTable && <span>Status</span>}<span>Metadata</span><span>Tools</span></div>
+        <div className={isImageTable ? "asset-row image-asset-row table-head" : isVideoTable ? "asset-row video-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span><span>KEY</span>{isImageTable && <span>Preview</span>}{isVideoTable && <span>Status</span>}<span>Metadata</span><span>Tools</span></div>
         {assets.map((asset, index) => (
           <div className={isImageTable ? "asset-row image-asset-row" : isVideoTable ? "asset-row video-asset-row" : "asset-row"} key={asset.id}>
             <span className="row-no">{assets.length - index}</span>
@@ -1361,6 +1414,25 @@ function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoading
               )}
               <div><strong>{asset.name}</strong><small>{asset.originalName}</small></div>
             </div>
+            <div className="asset-key-cell">
+              {editingKeyAssetId === asset.id ? (
+                <>
+                  <Input className="asset-key-input" autoFocus value={keyDraft} onChange={event => setKeyDraft(event.target.value)} onKeyDown={event => {
+                    if (event.key === "Enter") void saveKeyEdit(asset);
+                    if (event.key === "Escape") cancelKeyEdit();
+                  }} aria-label={`Key for ${asset.name}`} />
+                  <div className="toolset asset-key-tools">
+                    <Button variant="outline" size="icon-sm" disabled={savingKeyAssetId === asset.id} onClick={() => void saveKeyEdit(asset)} title="Save key" aria-label={`Save key for ${asset.name}`}><Check /></Button>
+                    <Button variant="outline" size="icon-sm" disabled={savingKeyAssetId === asset.id} onClick={cancelKeyEdit} title="Cancel key edit" aria-label={`Cancel key edit for ${asset.name}`}><X /></Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <code title={asset.key || "No key set"}>{asset.key || "-"}</code>
+                  {canManage && <Button variant="outline" size="icon-sm" onClick={() => startKeyEdit(asset)} title="Edit key" aria-label={`Edit key for ${asset.name}`}><Pencil /></Button>}
+                </>
+              )}
+            </div>
             {isImageTable && (
               <button className="image-preview" type="button" onClick={() => onPreview(asset)} title={`Preview ${asset.name}`}>
                 <img src={previewUrl(asset)} alt={asset.originalName} loading="lazy" />
@@ -1369,7 +1441,7 @@ function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoading
             {isVideoTable && <ConversionStatus asset={asset} />}
             <div className="metadata-list">{asset.metadata.map(item => <span key={item}>{item}</span>)}<span>{formatBytes(asset.sizeBytes)}</span><span>{asset.updatedAt.slice(0, 10)}</span></div>
             <div className="toolset">
-              <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "id")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
+              <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "id")} disabled={!asset.key.trim() || (isVideoTable && asset.conversionStatus !== "ready")} title={asset.key.trim() ? "Copy Link By Id" : "Set KEY before copying by id"} aria-label="Copy Link By Id"><Copy /></Button>
               <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "name")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
               <Button variant="outline" size="icon-sm" onClick={() => onDownload(asset)} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Download" aria-label="Download"><Download /></Button>
               {canManage && <Button variant="outline" size="icon-sm" onClick={() => requestReplacement(asset)} title="Replace file, keep name" aria-label={`Replace ${asset.name} without changing its file name`}><RefreshCw /></Button>}
