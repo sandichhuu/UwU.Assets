@@ -31,6 +31,7 @@ import {
   getUserById,
   getSessionUser,
   listUsers,
+  updateUserEnabled,
   updateUserPassword,
   type AuthUser,
   type UserRole,
@@ -130,7 +131,8 @@ function clearSessionCookie() {
 
 function currentUser(req: Request) {
   const sessionId = parseCookies(req).uwu_session;
-  return sessionId ? getSessionUser(sessionId) : null;
+  const user = sessionId ? getSessionUser(sessionId) : null;
+  return user?.enabled ? user : null;
 }
 
 function authError(req: Request, minimumRole: UserRole = "readonly") {
@@ -393,6 +395,31 @@ const server = serve({
     },
 
     "/api/auth/users/:userId": {
+      async PATCH(req) {
+        const requester = currentUser(req);
+        if (!requester) return Response.json({ error: "Login required" }, { status: 401 });
+        if (requester.mustChangePassword) return Response.json({ error: "Password change required" }, { status: 403 });
+
+        const target = getUserById(req.params.userId);
+        if (!target) return Response.json({ error: "Account not found" }, { status: 404 });
+        const canUpdateTarget = requester.id === target.id || requester.role === "admin" || (requester.role === "manager" && target.role === "readonly");
+        if (!canUpdateTarget) return Response.json({ error: "Permission denied" }, { status: 403 });
+
+        const body = (await req.json()) as { enabled?: boolean; password?: string };
+        if (typeof body.password === "string") {
+          if (body.password.length < 8) return Response.json({ error: "Password must be at least 8 characters" }, { status: 400 });
+          if (body.password === "admin") return Response.json({ error: "Password cannot be the default password" }, { status: 400 });
+          return Response.json({ user: await updateUserPassword(target.id, body.password) });
+        }
+
+        if (typeof body.enabled === "boolean") {
+          if (!isAccountManager(requester)) return Response.json({ error: "Permission denied" }, { status: 403 });
+          if (requester.id === target.id) return Response.json({ error: "You cannot disable your own account" }, { status: 400 });
+          return Response.json({ user: updateUserEnabled(target.id, body.enabled) });
+        }
+
+        return Response.json({ error: "Nothing to update" }, { status: 400 });
+      },
       async DELETE(req) {
         const requester = currentUser(req);
         if (!requester) return Response.json({ error: "Login required" }, { status: 401 });

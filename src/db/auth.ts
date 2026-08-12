@@ -5,6 +5,7 @@ export type AuthUser = {
   id: string;
   username: string;
   role: UserRole;
+  enabled: boolean;
   mustChangePassword: boolean;
 };
 
@@ -15,6 +16,7 @@ type UserRow = {
   username: string;
   password_hash: string;
   role: UserRole;
+  enabled: number;
   must_change_password: number;
 };
 
@@ -23,6 +25,7 @@ type SessionRow = {
   user_id: string;
   username: string;
   role: UserRole;
+  enabled: number;
   must_change_password: number;
 };
 
@@ -32,24 +35,24 @@ const defaultUsername = "admin";
 const defaultPassword = "admin";
 
 const getUserByUsernameQuery = db.query(`
-  SELECT id, username, password_hash, role, must_change_password
+  SELECT id, username, password_hash, role, enabled, must_change_password
   FROM users
   WHERE username = $username
 `);
 
 const getUserByIdQuery = db.query(`
-  SELECT id, username, password_hash, role, must_change_password
+  SELECT id, username, password_hash, role, enabled, must_change_password
   FROM users
   WHERE id = $id
 `);
 
 const insertUserQuery = db.query(`
-  INSERT INTO users (id, username, password_hash, role, must_change_password)
-  VALUES ($id, $username, $passwordHash, $role, $mustChangePassword)
+  INSERT INTO users (id, username, password_hash, role, enabled, must_change_password)
+  VALUES ($id, $username, $passwordHash, $role, 1, $mustChangePassword)
 `);
 
 const listUsersQuery = db.query(`
-  SELECT id, username, password_hash, role, must_change_password
+  SELECT id, username, password_hash, role, enabled, must_change_password
   FROM users
   ORDER BY
     CASE role WHEN 'admin' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
@@ -58,6 +61,13 @@ const listUsersQuery = db.query(`
 
 const deleteUserQuery = db.query(`
   DELETE FROM users
+  WHERE id = $id
+`);
+
+const updateUserEnabledQuery = db.query(`
+  UPDATE users
+  SET enabled = $enabled,
+      updated_at = datetime('now')
   WHERE id = $id
 `);
 
@@ -75,7 +85,7 @@ const insertSessionQuery = db.query(`
 `);
 
 const getSessionQuery = db.query(`
-  SELECT sessions.id AS session_id, users.id AS user_id, users.username, users.role, users.must_change_password
+  SELECT sessions.id AS session_id, users.id AS user_id, users.username, users.role, users.enabled, users.must_change_password
   FROM sessions
   JOIN users ON users.id = sessions.user_id
   WHERE sessions.id = $sessionId
@@ -132,6 +142,11 @@ export function deleteUser(userId: string) {
   return deleteUserQuery.run({ id: userId }).changes > 0;
 }
 
+export function updateUserEnabled(userId: string, enabled: boolean) {
+  updateUserEnabledQuery.run({ id: userId, enabled: enabled ? 1 : 0 });
+  return getUserById(userId);
+}
+
 export function getUserByUsername(username: string) {
   const row = getUserByUsernameQuery.get({ username }) as UserRow | null;
   return row ? mapUser(row) : null;
@@ -145,6 +160,7 @@ export function getUserPasswordHash(userId: string) {
 export async function verifyUserPassword(username: string, password: string) {
   const row = getUserByUsernameQuery.get({ username }) as UserRow | null;
   if (!row) return null;
+  if (!row.enabled) return null;
   const valid = await Bun.password.verify(password, row.password_hash);
   return valid ? mapUser(row) : null;
 }
@@ -170,6 +186,7 @@ export function getSessionUser(sessionId: string) {
         id: row.user_id,
         username: row.username,
         role: row.role,
+        enabled: Boolean(row.enabled),
         mustChangePassword: Boolean(row.must_change_password),
       }
     : null;
@@ -184,6 +201,7 @@ function mapUser(row: UserRow): AuthUser {
     id: row.id,
     username: row.username,
     role: row.role,
+    enabled: Boolean(row.enabled),
     mustChangePassword: Boolean(row.must_change_password),
   };
 }

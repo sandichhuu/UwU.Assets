@@ -933,9 +933,12 @@ h2 {
 }
 
 .account-modal {
-  width: min(720px, 100%);
-  max-height: calc(100vh - 36px);
-  overflow-y: auto;
+  width: min(440px, 100%);
+}
+
+.account-page {
+  display: grid;
+  gap: 18px;
 }
 
 .account-section {
@@ -943,37 +946,46 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 12px;
   align-items: end;
-  border-top: 1px solid hsl(207 45% 94%);
-  padding-top: 16px;
+  padding: 18px;
 }
 
-.account-list {
+.account-table {
+  overflow-x: auto;
+}
+
+.account-table-row {
   display: grid;
-  gap: 8px;
-  border-top: 1px solid hsl(207 45% 94%);
-  padding-top: 16px;
+  grid-template-columns: minmax(200px, 1fr) 120px 170px 150px 140px;
+  align-items: center;
+  gap: 16px;
+  min-width: 820px;
+  padding: 14px 18px;
+  border-bottom: 1px solid hsl(207 45% 94%);
 }
 
-.account-row {
+.account-table-row:not(.table-head):hover {
+  background: hsl(207 100% 98%);
+}
+
+.account-role {
+  color: #6f7e8e;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.account-enabled {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid hsl(207 60% 90%);
-  border-radius: 8px;
-  padding: 10px 12px;
+  gap: 8px;
+  color: #536575;
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.account-row strong,
-.account-row span {
-  display: block;
-}
-
-.account-row span {
-  margin-top: 2px;
-  color: #6f7e8e;
-  font-size: 12px;
-  text-transform: capitalize;
+.account-enabled input {
+  width: 16px;
+  height: 16px;
+  accent-color: hsl(207 100% 43%);
 }
 
 .modal-title-row {

@@ -48,6 +48,9 @@ function ensureUserRoleColumn(db: Database) {
     db.run("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'readonly';");
     db.run("UPDATE users SET role = 'admin' WHERE username = 'admin';");
   }
+  if (!names.has("enabled")) {
+    db.run("ALTER TABLE users ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;");
+  }
 }
 
 function ensureAssetConversionColumns(db: Database) {
@@ -72,6 +75,7 @@ function ensureAuthTables(db: Database) {
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'readonly',
+      enabled INTEGER NOT NULL DEFAULT 1,
       must_change_password INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))

@@ -87,6 +87,7 @@ type AuthUser = {
   id: string;
   username: string;
   role: UserRole;
+  enabled: boolean;
   mustChangePassword: boolean;
 };
 
@@ -268,9 +269,11 @@ export function App() {
   const [assetHasMore, setAssetHasMore] = useState<Record<AssetKind, boolean>>({ Image: true, Audio: true, Video: true });
   const [isLoadingMoreAssets, setIsLoadingMoreAssets] = useState(false);
   const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
-  const [isAccountDialogOpen, setIsAccountDialogOpen] = useState(false);
+  const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
+  const [isAddAccountDialogOpen, setIsAddAccountDialogOpen] = useState(false);
   const [accountUsers, setAccountUsers] = useState<AuthUser[]>([]);
-  const [accountPasswordForm, setAccountPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [passwordChangeTarget, setPasswordChangeTarget] = useState<AuthUser | null>(null);
+  const [passwordChangeForm, setPasswordChangeForm] = useState({ newPassword: "", confirmPassword: "" });
   const [newAccountForm, setNewAccountForm] = useState<{ username: string; password: string; role: Exclude<UserRole, "admin"> }>({
     username: "",
     password: "",
@@ -293,6 +296,7 @@ export function App() {
   );
   const canManageAssets = authUser?.role === "admin" || authUser?.role === "manager";
   const canManageAccounts = canManageAssets;
+  const visibleTabs = canManageAssets ? tabs : tabs.filter(tab => tab !== "Settings");
 
   const loadCurrentUser = async () => {
     const response = await fetch("/api/auth/me");
@@ -359,9 +363,8 @@ export function App() {
   };
 
   const openAccountDialog = () => {
-    setAccountPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
     setNewAccountForm({ username: "", password: "", role: "readonly" });
-    setIsAccountDialogOpen(true);
+    setIsAccountPanelOpen(true);
     void loadAccountUsers().catch(error => showToast.error(error instanceof Error ? error.message : String(error)));
   };
 
@@ -386,6 +389,10 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(selectedTabStorageKey, activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!canManageAssets && activeTab === "Settings") setActiveTab("Image");
+  }, [activeTab, canManageAssets]);
 
   useEffect(() => {
     if (authUser && !authUser.mustChangePassword && activeProjectId) {
@@ -694,17 +701,25 @@ export function App() {
     void saveSettings(token, value);
   };
 
+  const openPasswordDialog = (user: AuthUser) => {
+    setPasswordChangeTarget(user);
+    setPasswordChangeForm({ newPassword: "", confirmPassword: "" });
+  };
+
   const changeAccountPassword = async () => {
-    if (accountPasswordForm.newPassword !== accountPasswordForm.confirmPassword) return showToast.warning("Password confirmation does not match");
-    const response = await fetch("/api/auth/password", {
-      method: "PUT",
+    if (!passwordChangeTarget) return;
+    if (passwordChangeForm.newPassword !== passwordChangeForm.confirmPassword) return showToast.warning("Password confirmation does not match");
+    const response = await fetch(`/api/auth/users/${encodeURIComponent(passwordChangeTarget.id)}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ currentPassword: accountPasswordForm.currentPassword, newPassword: accountPasswordForm.newPassword }),
+      body: JSON.stringify({ password: passwordChangeForm.newPassword }),
     });
     const data = await response.json();
     if (!response.ok) return showToast.error(data.error ?? "Could not update password");
-    setAuthUser(data.user);
-    setAccountPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    if (passwordChangeTarget.id === authUser?.id) setAuthUser(data.user);
+    setPasswordChangeTarget(null);
+    setPasswordChangeForm({ newPassword: "", confirmPassword: "" });
+    await loadAccountUsers();
     showToast.success("Password updated");
   };
 
@@ -717,8 +732,21 @@ export function App() {
     const data = await response.json();
     if (!response.ok) return showToast.error(data.error ?? "Could not create account");
     setNewAccountForm({ username: "", password: "", role: "readonly" });
+    setIsAddAccountDialogOpen(false);
     await loadAccountUsers();
     showToast.success(`Created ${data.user.username}`);
+  };
+
+  const updateAccountEnabled = async (user: AuthUser, enabled: boolean) => {
+    const response = await fetch(`/api/auth/users/${encodeURIComponent(user.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await response.json();
+    if (!response.ok) return showToast.error(data.error ?? "Could not update account");
+    await loadAccountUsers();
+    showToast.success(`${user.username} ${enabled ? "enabled" : "disabled"}`);
   };
 
   const removeAccount = async (user: AuthUser) => {
@@ -768,14 +796,23 @@ export function App() {
             <Button className="project-create" disabled={!canManageAssets} onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
               <FolderPlus /> Project
             </Button>
-            <Button className="project-account" variant="outline" size="icon" onClick={openAccountDialog} title="Manage account" aria-label="Manage account">
+            {canManageAccounts && <Button className="project-account" variant="outline" size="icon" onClick={openAccountDialog} title="Manage account" aria-label="Manage account">
               <Settings />
-            </Button>
+            </Button>}
           </div>
         </aside>
 
-        <section className="workspace empty-workspace">
-          <Card className="database-empty-state">
+        <section className={isAccountPanelOpen ? "workspace" : "workspace empty-workspace"}>
+          {isAccountPanelOpen && authUser ? (
+            <AccountPanel
+              currentUser={authUser}
+              users={accountUsers}
+              onAddAccount={() => setIsAddAccountDialogOpen(true)}
+              onChangePassword={openPasswordDialog}
+              onRemoveAccount={removeAccount}
+              onUpdateAccountEnabled={updateAccountEnabled}
+            />
+          ) : <Card className="database-empty-state">
             <FolderPlus />
             <div>
               <h1>No projects yet</h1>
@@ -784,7 +821,7 @@ export function App() {
             <Button disabled={!canManageAssets} onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
               <FolderPlus /> Create project
             </Button>
-          </Card>
+          </Card>}
           <Toaster position="top-right" richColors closeButton />
         </section>
 
@@ -797,18 +834,21 @@ export function App() {
             </form>
           </div>
         )}
-        {isAccountDialogOpen && authUser && (
-          <AccountManagerModal
-            currentUser={authUser}
-            users={accountUsers}
-            passwordForm={accountPasswordForm}
+        {isAddAccountDialogOpen && authUser && (
+          <AddAccountModal
             newAccountForm={newAccountForm}
-            onClose={() => setIsAccountDialogOpen(false)}
+            onClose={() => setIsAddAccountDialogOpen(false)}
             onCreateAccount={createAccount}
             onNewAccountFormChange={setNewAccountForm}
-            onPasswordChange={changeAccountPassword}
-            onPasswordFormChange={setAccountPasswordForm}
-            onRemoveAccount={removeAccount}
+          />
+        )}
+        {passwordChangeTarget && (
+          <ChangePasswordModal
+            target={passwordChangeTarget}
+            form={passwordChangeForm}
+            onClose={() => setPasswordChangeTarget(null)}
+            onFormChange={setPasswordChangeForm}
+            onSubmit={changeAccountPassword}
           />
         )}
       </main>
@@ -829,13 +869,13 @@ export function App() {
           <Button className="project-create" disabled={!canManageAssets} onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
             <FolderPlus /> Project
           </Button>
-          <Button className="project-account" variant="outline" size="icon" onClick={openAccountDialog} title="Manage account" aria-label="Manage account">
+          {canManageAccounts && <Button className="project-account" variant="outline" size="icon" onClick={openAccountDialog} title="Manage account" aria-label="Manage account">
             <Settings />
-          </Button>
+          </Button>}
         </div>
         <div className="project-list">
           {projects.map(project => (
-            <button className={project.id === activeProject.id ? "project-item is-active" : "project-item"} key={project.id} onClick={() => setActiveProjectId(project.id)}>
+            <button className={project.id === activeProject.id && !isAccountPanelOpen ? "project-item is-active" : "project-item"} key={project.id} onClick={() => { setIsAccountPanelOpen(false); setActiveProjectId(project.id); }}>
               <span>{project.name}</span>
               <small>{project.assets.Image.length + project.assets.Audio.length + project.assets.Video.length} assets</small>
             </button>
@@ -849,24 +889,33 @@ export function App() {
 
       <section className="workspace">
         <header className="topbar">
-          <div className="title-cluster"><div><span className="eyebrow">Project</span><h1>{activeProject.name}</h1></div></div>
+          <div className="title-cluster"><div><span className="eyebrow">{isAccountPanelOpen ? "Admin" : "Project"}</span><h1>{isAccountPanelOpen ? "Manage accounts" : activeProject.name}</h1></div></div>
           <Button variant="outline" onClick={() => void logout()}><LogOut />Logout</Button>
         </header>
-        <section className="metric-row" aria-label="Project summary">
+        {!isAccountPanelOpen && <section className="metric-row" aria-label="Project summary">
           <Card><strong>{totalAssets}</strong><span>Total assets</span></Card>
           <Card><strong>{tabAssetCount}</strong><span>Rows in view</span></Card>
           <Card><strong>{languages.length}</strong><span>Localization languages</span></Card>
           <Card><strong>{storageUsage === null ? "..." : formatBytes(storageUsage.bytes)}</strong><span>Storage usage</span></Card>
-        </section>
-        <nav className="tabbar" aria-label="Asset tabs">
-          {tabs.map(tab => {
+        </section>}
+        {!isAccountPanelOpen && <nav className="tabbar" aria-label="Asset tabs">
+          {visibleTabs.map(tab => {
             const Icon = tab === "Image" ? FileImage : tab === "Audio" ? FileAudio : tab === "Video" ? FileVideo : tab === "Settings" ? Settings : Globe2;
-            return <button className={activeTab === tab ? "tab is-active" : "tab"} key={tab} onClick={() => setActiveTab(tab)}><Icon />{tab}</button>;
+            return <button className={activeTab === tab ? "tab is-active" : "tab"} key={tab} onClick={() => { setIsAccountPanelOpen(false); setActiveTab(tab); }}><Icon />{tab}</button>;
           })}
-        </nav>
+        </nav>}
 
-        <div className="tab-panel" key={activeTab}>
-          {activeTab === "Settings" ? (
+        <div className="tab-panel" key={isAccountPanelOpen ? "accounts" : activeTab}>
+          {isAccountPanelOpen && authUser ? (
+            <AccountPanel
+              currentUser={authUser}
+              users={accountUsers}
+              onAddAccount={() => setIsAddAccountDialogOpen(true)}
+              onChangePassword={openPasswordDialog}
+              onRemoveAccount={removeAccount}
+              onUpdateAccountEnabled={updateAccountEnabled}
+            />
+          ) : activeTab === "Settings" ? (
             <SettingPanel canManage={canManageAssets} assetToken={token} gptApiToken={gptApiToken} projectName={activeProject.name} onCopy={copyToClipboard} onDeleteProject={() => { setDeleteProjectName(""); setIsDeleteProjectDialogOpen(true); }} onGenerateToken={generateToken} onGptApiTokenChange={updateGptApiToken} />
           ) : activeLocalizationKind ? (
             <LocalizationTable canManage={canManageAssets} kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
@@ -909,18 +958,21 @@ export function App() {
           }}
         />
       )}
-      {isAccountDialogOpen && authUser && (
-        <AccountManagerModal
-          currentUser={authUser}
-          users={accountUsers}
-          passwordForm={accountPasswordForm}
+      {isAddAccountDialogOpen && authUser && (
+        <AddAccountModal
           newAccountForm={newAccountForm}
-          onClose={() => setIsAccountDialogOpen(false)}
+          onClose={() => setIsAddAccountDialogOpen(false)}
           onCreateAccount={createAccount}
           onNewAccountFormChange={setNewAccountForm}
-          onPasswordChange={changeAccountPassword}
-          onPasswordFormChange={setAccountPasswordForm}
-          onRemoveAccount={removeAccount}
+        />
+      )}
+      {passwordChangeTarget && (
+        <ChangePasswordModal
+          target={passwordChangeTarget}
+          form={passwordChangeForm}
+          onClose={() => setPasswordChangeTarget(null)}
+          onFormChange={setPasswordChangeForm}
+          onSubmit={changeAccountPassword}
         />
       )}
       <Toaster position="top-right" richColors closeButton />
@@ -1305,40 +1357,58 @@ function LocalizationTable({ canManage, kind, rows, title, token, onAddRecord, o
   );
 }
 
-function AccountManagerModal({ currentUser, users, passwordForm, newAccountForm, onClose, onCreateAccount, onNewAccountFormChange, onPasswordChange, onPasswordFormChange, onRemoveAccount }: { currentUser: AuthUser; users: AuthUser[]; passwordForm: { currentPassword: string; newPassword: string; confirmPassword: string }; newAccountForm: { username: string; password: string; role: Exclude<UserRole, "admin"> }; onClose: () => void; onCreateAccount: () => void; onNewAccountFormChange: Dispatch<SetStateAction<{ username: string; password: string; role: Exclude<UserRole, "admin"> }>>; onPasswordChange: () => void; onPasswordFormChange: Dispatch<SetStateAction<{ currentPassword: string; newPassword: string; confirmPassword: string }>>; onRemoveAccount: (user: AuthUser) => void }) {
+function AccountPanel({ currentUser, users, onAddAccount, onChangePassword, onRemoveAccount, onUpdateAccountEnabled }: { currentUser: AuthUser; users: AuthUser[]; onAddAccount: () => void; onChangePassword: (user: AuthUser) => void; onRemoveAccount: (user: AuthUser) => void; onUpdateAccountEnabled: (user: AuthUser, enabled: boolean) => void }) {
   const canManageAccounts = currentUser.role === "admin" || currentUser.role === "manager";
+  const canChangePassword = (user: AuthUser) => currentUser.id === user.id || currentUser.role === "admin" || (currentUser.role === "manager" && user.role === "readonly");
   const canRemove = (user: AuthUser) => currentUser.id !== user.id && (currentUser.role === "admin" || user.role === "readonly");
+  const canToggle = (user: AuthUser) => currentUser.id !== user.id && (currentUser.role === "admin" || user.role === "readonly");
 
   return (
+    <div className="account-page">
+      {canManageAccounts && (
+        <Card className="table-shell">
+          <div className="table-toolbar"><div><h2>Accounts</h2><p>Manager accounts can update readonly accounts only.</p></div><Button onClick={onAddAccount}><Plus />Add Account</Button></div>
+          <div className="account-table">
+            <div className="account-table-row table-head"><span>Username</span><span>Role</span><span>Password</span><span>Status</span><span>Tools</span></div>
+            {users.map(user => (
+              <div className="account-table-row" key={user.id}>
+                <strong>{user.username}</strong>
+                <span className="account-role">{user.role}</span>
+                <Button variant="outline" size="sm" disabled={!canChangePassword(user)} onClick={() => onChangePassword(user)}>Change Password</Button>
+                <label className="account-enabled"><input type="checkbox" checked={user.enabled} disabled={!canToggle(user)} onChange={event => void onUpdateAccountEnabled(user, event.currentTarget.checked)} /><span>{user.enabled ? "Enabled" : "Disabled"}</span></label>
+                <div className="toolset"><Button variant="destructive" size="sm" disabled={!canRemove(user)} onClick={() => void onRemoveAccount(user)}><Trash2 />Remove</Button></div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function AddAccountModal({ newAccountForm, onClose, onCreateAccount, onNewAccountFormChange }: { newAccountForm: { username: string; password: string; role: Exclude<UserRole, "admin"> }; onClose: () => void; onCreateAccount: () => void; onNewAccountFormChange: Dispatch<SetStateAction<{ username: string; password: string; role: Exclude<UserRole, "admin"> }>> }) {
+  return (
     <div className="modal-backdrop" role="presentation">
-      <div className="project-modal account-modal" role="dialog" aria-modal="true" aria-label="Manage account">
-        <div><h2>Manage account</h2><p>{currentUser.username} · {currentUser.role}</p></div>
-        <form className="account-section" onSubmit={event => { event.preventDefault(); void onPasswordChange(); }}>
-          <label>Current password<Input type="password" value={passwordForm.currentPassword} onChange={event => onPasswordFormChange(current => ({ ...current, currentPassword: event.target.value }))} /></label>
-          <label>New password<Input type="password" minLength={8} value={passwordForm.newPassword} onChange={event => onPasswordFormChange(current => ({ ...current, newPassword: event.target.value }))} /></label>
-          <label>Confirm password<Input type="password" minLength={8} value={passwordForm.confirmPassword} onChange={event => onPasswordFormChange(current => ({ ...current, confirmPassword: event.target.value }))} /></label>
-          <Button type="submit">Change password</Button>
-        </form>
-        {canManageAccounts && (
-          <>
-            <form className="account-section" onSubmit={event => { event.preventDefault(); void onCreateAccount(); }}>
-              <label>Username<Input value={newAccountForm.username} onChange={event => onNewAccountFormChange(current => ({ ...current, username: event.target.value }))} /></label>
-              <label>Password<Input type="password" minLength={8} value={newAccountForm.password} onChange={event => onNewAccountFormChange(current => ({ ...current, password: event.target.value }))} /></label>
-              <label>Role<select value={newAccountForm.role} onChange={event => onNewAccountFormChange(current => ({ ...current, role: event.target.value as Exclude<UserRole, "admin"> }))}><option value="readonly">Readonly</option><option value="manager">Manager</option></select></label>
-              <Button type="submit"><Plus />Create account</Button>
-            </form>
-            <div className="account-list">
-              {users.map(user => (
-                <div className="account-row" key={user.id}>
-                  <div><strong>{user.username}</strong><span>{user.role}</span></div>
-                  <Button variant="destructive" size="sm" disabled={!canRemove(user)} onClick={() => void onRemoveAccount(user)}><Trash2 />Remove</Button>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-        <div className="modal-actions"><Button type="button" variant="outline" onClick={onClose}>Close</Button></div>
-      </div>
+      <form className="project-modal account-modal" role="dialog" aria-modal="true" aria-label="Add account" onSubmit={event => { event.preventDefault(); void onCreateAccount(); }}>
+        <div><h2>Add Account</h2><p>Create a readonly or manager account.</p></div>
+        <label>Username<Input autoFocus value={newAccountForm.username} onChange={event => onNewAccountFormChange(current => ({ ...current, username: event.target.value }))} /></label>
+        <label>Password<Input type="password" minLength={8} value={newAccountForm.password} onChange={event => onNewAccountFormChange(current => ({ ...current, password: event.target.value }))} /></label>
+        <label>Role<select value={newAccountForm.role} onChange={event => onNewAccountFormChange(current => ({ ...current, role: event.target.value as Exclude<UserRole, "admin"> }))}><option value="readonly">Readonly</option><option value="manager">Manager</option></select></label>
+        <div className="modal-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit"><Plus />Create account</Button></div>
+      </form>
+    </div>
+  );
+}
+
+function ChangePasswordModal({ target, form, onClose, onFormChange, onSubmit }: { target: AuthUser; form: { newPassword: string; confirmPassword: string }; onClose: () => void; onFormChange: Dispatch<SetStateAction<{ newPassword: string; confirmPassword: string }>>; onSubmit: () => void }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="project-modal account-modal" role="dialog" aria-modal="true" aria-label={`Change password for ${target.username}`} onSubmit={event => { event.preventDefault(); void onSubmit(); }}>
+        <div><h2>Change Password</h2><p>{target.username} · {target.role}</p></div>
+        <label>New password<Input autoFocus type="password" minLength={8} value={form.newPassword} onChange={event => onFormChange(current => ({ ...current, newPassword: event.target.value }))} /></label>
+        <label>Confirm password<Input type="password" minLength={8} value={form.confirmPassword} onChange={event => onFormChange(current => ({ ...current, confirmPassword: event.target.value }))} /></label>
+        <div className="modal-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit">Change Password</Button></div>
+      </form>
     </div>
   );
 }
