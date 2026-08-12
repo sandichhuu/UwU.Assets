@@ -165,6 +165,20 @@
   box-shadow: 0 10px 30px hsl(211 90% 28% / 20%);
 }
 
+.project-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.project-account {
+  background: hsl(0 0% 100%);
+  color: hsl(207 100% 43%);
+  border-color: hsl(207 100% 82%);
+  box-shadow: 0 10px 30px hsl(211 90% 28% / 16%);
+}
+
 .project-list {
   display: grid;
   gap: 8px;
@@ -910,6 +924,58 @@ h2 {
   font-weight: 700;
 }
 
+.project-modal select {
+  height: 36px;
+  border: 1px solid hsl(207 60% 90%);
+  border-radius: 8px;
+  background: white;
+  padding: 0 10px;
+}
+
+.account-modal {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+}
+
+.account-section {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+  border-top: 1px solid hsl(207 45% 94%);
+  padding-top: 16px;
+}
+
+.account-list {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid hsl(207 45% 94%);
+  padding-top: 16px;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid hsl(207 60% 90%);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.account-row strong,
+.account-row span {
+  display: block;
+}
+
+.account-row span {
+  margin-top: 2px;
+  color: #6f7e8e;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
 .modal-title-row {
   display: flex;
   align-items: center;
@@ -975,9 +1041,14 @@ h2 {
 
   .topbar,
   .table-toolbar,
+  .account-section,
   .setting-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .account-section {
+    display: flex;
   }
 
   .setting-row {

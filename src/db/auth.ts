@@ -4,13 +4,17 @@ import { getDatabase } from "./database";
 export type AuthUser = {
   id: string;
   username: string;
+  role: UserRole;
   mustChangePassword: boolean;
 };
+
+export type UserRole = "admin" | "manager" | "readonly";
 
 type UserRow = {
   id: string;
   username: string;
   password_hash: string;
+  role: UserRole;
   must_change_password: number;
 };
 
@@ -18,6 +22,7 @@ type SessionRow = {
   session_id: string;
   user_id: string;
   username: string;
+  role: UserRole;
   must_change_password: number;
 };
 
@@ -27,20 +32,33 @@ const defaultUsername = "admin";
 const defaultPassword = "admin";
 
 const getUserByUsernameQuery = db.query(`
-  SELECT id, username, password_hash, must_change_password
+  SELECT id, username, password_hash, role, must_change_password
   FROM users
   WHERE username = $username
 `);
 
 const getUserByIdQuery = db.query(`
-  SELECT id, username, password_hash, must_change_password
+  SELECT id, username, password_hash, role, must_change_password
   FROM users
   WHERE id = $id
 `);
 
 const insertUserQuery = db.query(`
-  INSERT INTO users (id, username, password_hash, must_change_password)
-  VALUES ($id, $username, $passwordHash, $mustChangePassword)
+  INSERT INTO users (id, username, password_hash, role, must_change_password)
+  VALUES ($id, $username, $passwordHash, $role, $mustChangePassword)
+`);
+
+const listUsersQuery = db.query(`
+  SELECT id, username, password_hash, role, must_change_password
+  FROM users
+  ORDER BY
+    CASE role WHEN 'admin' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
+    username COLLATE NOCASE
+`);
+
+const deleteUserQuery = db.query(`
+  DELETE FROM users
+  WHERE id = $id
 `);
 
 const updatePasswordQuery = db.query(`
@@ -57,7 +75,7 @@ const insertSessionQuery = db.query(`
 `);
 
 const getSessionQuery = db.query(`
-  SELECT sessions.id AS session_id, users.id AS user_id, users.username, users.must_change_password
+  SELECT sessions.id AS session_id, users.id AS user_id, users.username, users.role, users.must_change_password
   FROM sessions
   JOIN users ON users.id = sessions.user_id
   WHERE sessions.id = $sessionId
@@ -83,9 +101,35 @@ export async function ensureDefaultAdminUser() {
     id: `usr-${randomUUID()}`,
     username: defaultUsername,
     passwordHash,
+    role: "admin",
     mustChangePassword: 1,
   });
   return getUserByUsername(defaultUsername);
+}
+
+export function listUsers() {
+  return (listUsersQuery.all() as UserRow[]).map(mapUser);
+}
+
+export async function createUser(username: string, password: string, role: Exclude<UserRole, "admin">) {
+  const passwordHash = await Bun.password.hash(password);
+  insertUserQuery.run({
+    id: `usr-${randomUUID()}`,
+    username,
+    passwordHash,
+    role,
+    mustChangePassword: 0,
+  });
+  return getUserByUsername(username);
+}
+
+export function getUserById(userId: string) {
+  const row = getUserByIdQuery.get({ id: userId }) as UserRow | null;
+  return row ? mapUser(row) : null;
+}
+
+export function deleteUser(userId: string) {
+  return deleteUserQuery.run({ id: userId }).changes > 0;
 }
 
 export function getUserByUsername(username: string) {
@@ -125,6 +169,7 @@ export function getSessionUser(sessionId: string) {
     ? {
         id: row.user_id,
         username: row.username,
+        role: row.role,
         mustChangePassword: Boolean(row.must_change_password),
       }
     : null;
@@ -138,6 +183,7 @@ function mapUser(row: UserRow): AuthUser {
   return {
     id: row.id,
     username: row.username,
+    role: row.role,
     mustChangePassword: Boolean(row.must_change_password),
   };
 }

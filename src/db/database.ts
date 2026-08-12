@@ -35,8 +35,19 @@ export function getDatabase() {
   database.run(schema);
   ensureAssetConversionColumns(database);
   ensureAuthTables(database);
+  ensureUserRoleColumn(database);
 
   return database;
+}
+
+function ensureUserRoleColumn(db: Database) {
+  const columns = db.query("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+  const names = new Set(columns.map(column => column.name));
+
+  if (!names.has("role")) {
+    db.run("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'readonly';");
+    db.run("UPDATE users SET role = 'admin' WHERE username = 'admin';");
+  }
 }
 
 function ensureAssetConversionColumns(db: Database) {
@@ -60,6 +71,7 @@ function ensureAuthTables(db: Database) {
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'readonly',
       must_change_password INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))

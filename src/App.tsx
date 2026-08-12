@@ -81,9 +81,12 @@ type StorageUsage = {
   };
 };
 
+type UserRole = "admin" | "manager" | "readonly";
+
 type AuthUser = {
   id: string;
   username: string;
+  role: UserRole;
   mustChangePassword: boolean;
 };
 
@@ -265,6 +268,14 @@ export function App() {
   const [assetHasMore, setAssetHasMore] = useState<Record<AssetKind, boolean>>({ Image: true, Audio: true, Video: true });
   const [isLoadingMoreAssets, setIsLoadingMoreAssets] = useState(false);
   const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
+  const [isAccountDialogOpen, setIsAccountDialogOpen] = useState(false);
+  const [accountUsers, setAccountUsers] = useState<AuthUser[]>([]);
+  const [accountPasswordForm, setAccountPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [newAccountForm, setNewAccountForm] = useState<{ username: string; password: string; role: Exclude<UserRole, "admin"> }>({
+    username: "",
+    password: "",
+    role: "readonly",
+  });
 
   const activeProject = projects.find(project => project.id === activeProjectId) ?? projects[0];
   const activeLocalizationKind: LocalizationKind | null =
@@ -280,6 +291,8 @@ export function App() {
     () => projects.reduce((sum, project) => sum + project.assets.Image.length + project.assets.Audio.length + project.assets.Video.length, 0),
     [projects],
   );
+  const canManageAssets = authUser?.role === "admin" || authUser?.role === "manager";
+  const canManageAccounts = canManageAssets;
 
   const loadCurrentUser = async () => {
     const response = await fetch("/api/auth/me");
@@ -335,6 +348,21 @@ export function App() {
     if (!response.ok) throw new Error("Could not load storage usage");
     const data = (await response.json()) as StorageUsage;
     setStorageUsage(data);
+  };
+
+  const loadAccountUsers = async () => {
+    if (!canManageAccounts) return;
+    const response = await fetch("/api/auth/users");
+    if (!response.ok) throw new Error("Could not load accounts");
+    const data = (await response.json()) as { users: AuthUser[] };
+    setAccountUsers(data.users);
+  };
+
+  const openAccountDialog = () => {
+    setAccountPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    setNewAccountForm({ username: "", password: "", role: "readonly" });
+    setIsAccountDialogOpen(true);
+    void loadAccountUsers().catch(error => showToast.error(error instanceof Error ? error.message : String(error)));
   };
 
   useEffect(() => {
@@ -407,7 +435,12 @@ export function App() {
   const assetUrl = (asset: Asset, mode: "id" | "name") => {
     const key = mode === "id" ? asset.id : asset.name;
     const path = `/assets/${mode}/${encodeURIComponent(key)}`;
-    return `${location.origin}${path}?token=${encodeURIComponent(token)}`;
+    return authUser ? `${location.origin}${path}` : `${location.origin}${path}?token=${encodeURIComponent(token)}`;
+  };
+
+  const assetPreviewUrl = (asset: Asset) => {
+    const url = assetUrl(asset, "name");
+    return `${url}${url.includes("?") ? "&" : "?"}preview=1`;
   };
 
   const copyToClipboard = async (value: string, label: string) => {
@@ -661,6 +694,41 @@ export function App() {
     void saveSettings(token, value);
   };
 
+  const changeAccountPassword = async () => {
+    if (accountPasswordForm.newPassword !== accountPasswordForm.confirmPassword) return showToast.warning("Password confirmation does not match");
+    const response = await fetch("/api/auth/password", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword: accountPasswordForm.currentPassword, newPassword: accountPasswordForm.newPassword }),
+    });
+    const data = await response.json();
+    if (!response.ok) return showToast.error(data.error ?? "Could not update password");
+    setAuthUser(data.user);
+    setAccountPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    showToast.success("Password updated");
+  };
+
+  const createAccount = async () => {
+    const response = await fetch("/api/auth/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newAccountForm),
+    });
+    const data = await response.json();
+    if (!response.ok) return showToast.error(data.error ?? "Could not create account");
+    setNewAccountForm({ username: "", password: "", role: "readonly" });
+    await loadAccountUsers();
+    showToast.success(`Created ${data.user.username}`);
+  };
+
+  const removeAccount = async (user: AuthUser) => {
+    const response = await fetch(`/api/auth/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+    const data = await response.json();
+    if (!response.ok) return showToast.error(data.error ?? "Could not remove account");
+    await loadAccountUsers();
+    showToast.success(`Removed ${user.username}`);
+  };
+
   if (authUser === undefined) {
     return (
       <main className="auth-screen">
@@ -696,9 +764,14 @@ export function App() {
               <DiskStorageLabel storageUsage={storageUsage} />
             </div>
           </div>
-          <Button className="project-create" onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
-            <FolderPlus /> Project
-          </Button>
+          <div className="project-action-row">
+            <Button className="project-create" disabled={!canManageAssets} onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
+              <FolderPlus /> Project
+            </Button>
+            <Button className="project-account" variant="outline" size="icon" onClick={openAccountDialog} title="Manage account" aria-label="Manage account">
+              <Settings />
+            </Button>
+          </div>
         </aside>
 
         <section className="workspace empty-workspace">
@@ -708,7 +781,7 @@ export function App() {
               <h1>No projects yet</h1>
               <p>The SQLite database is connected, but it does not have any project rows to display.</p>
             </div>
-            <Button onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
+            <Button disabled={!canManageAssets} onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
               <FolderPlus /> Create project
             </Button>
           </Card>
@@ -724,6 +797,20 @@ export function App() {
             </form>
           </div>
         )}
+        {isAccountDialogOpen && authUser && (
+          <AccountManagerModal
+            currentUser={authUser}
+            users={accountUsers}
+            passwordForm={accountPasswordForm}
+            newAccountForm={newAccountForm}
+            onClose={() => setIsAccountDialogOpen(false)}
+            onCreateAccount={createAccount}
+            onNewAccountFormChange={setNewAccountForm}
+            onPasswordChange={changeAccountPassword}
+            onPasswordFormChange={setAccountPasswordForm}
+            onRemoveAccount={removeAccount}
+          />
+        )}
       </main>
     );
   }
@@ -738,9 +825,14 @@ export function App() {
             <DiskStorageLabel storageUsage={storageUsage} />
           </div>
         </div>
-        <Button className="project-create" onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
-          <FolderPlus /> Project
-        </Button>
+        <div className="project-action-row">
+          <Button className="project-create" disabled={!canManageAssets} onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
+            <FolderPlus /> Project
+          </Button>
+          <Button className="project-account" variant="outline" size="icon" onClick={openAccountDialog} title="Manage account" aria-label="Manage account">
+            <Settings />
+          </Button>
+        </div>
         <div className="project-list">
           {projects.map(project => (
             <button className={project.id === activeProject.id ? "project-item is-active" : "project-item"} key={project.id} onClick={() => setActiveProjectId(project.id)}>
@@ -775,11 +867,11 @@ export function App() {
 
         <div className="tab-panel" key={activeTab}>
           {activeTab === "Settings" ? (
-            <SettingPanel assetToken={token} gptApiToken={gptApiToken} projectName={activeProject.name} onCopy={copyToClipboard} onDeleteProject={() => { setDeleteProjectName(""); setIsDeleteProjectDialogOpen(true); }} onGenerateToken={generateToken} onGptApiTokenChange={updateGptApiToken} />
+            <SettingPanel canManage={canManageAssets} assetToken={token} gptApiToken={gptApiToken} projectName={activeProject.name} onCopy={copyToClipboard} onDeleteProject={() => { setDeleteProjectName(""); setIsDeleteProjectDialogOpen(true); }} onGenerateToken={generateToken} onGptApiTokenChange={updateGptApiToken} />
           ) : activeLocalizationKind ? (
-            <LocalizationTable kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
+            <LocalizationTable canManage={canManageAssets} kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
           ) : (
-            <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={asset => `${assetUrl(asset, "name")}&preview=1`} onPreview={asset => setPreviewAsset({ asset, previewUrl: `${assetUrl(asset, "name")}&preview=1`, originalUrl: assetUrl(asset, "name") })} />
+            <AssetTable canManage={canManageAssets} assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={assetPreviewUrl} onPreview={asset => setPreviewAsset({ asset, previewUrl: assetPreviewUrl(asset), originalUrl: assetUrl(asset, "name") })} />
           )}
         </div>
       </section>
@@ -815,6 +907,20 @@ export function App() {
             setDeleteAssetTarget(null);
             void removeAsset(asset);
           }}
+        />
+      )}
+      {isAccountDialogOpen && authUser && (
+        <AccountManagerModal
+          currentUser={authUser}
+          users={accountUsers}
+          passwordForm={accountPasswordForm}
+          newAccountForm={newAccountForm}
+          onClose={() => setIsAccountDialogOpen(false)}
+          onCreateAccount={createAccount}
+          onNewAccountFormChange={setNewAccountForm}
+          onPasswordChange={changeAccountPassword}
+          onPasswordFormChange={setAccountPasswordForm}
+          onRemoveAccount={removeAccount}
         />
       )}
       <Toaster position="top-right" richColors closeButton />
@@ -967,7 +1073,7 @@ function ConfirmAssetDeleteModal({ asset, onCancel, onConfirm }: { asset: Asset;
   );
 }
 
-function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; audioUrl: (asset: Asset) => string; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
+function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; audioUrl: (asset: Asset) => string; canManage: boolean; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -1014,7 +1120,7 @@ function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCop
 
   return (
     <Card className="table-shell">
-      <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div><div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div></div>
+      <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div>{canManage && <div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div>}</div>
       <div className="data-table">
         {isAudioTable && <audio ref={audioRef} className="hidden" onEnded={() => setPlayingAssetId(null)} />}
         <div className={isImageTable ? "asset-row image-asset-row table-head" : isVideoTable ? "asset-row video-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span>{isImageTable && <span>Preview</span>}{isVideoTable && <span>Status</span>}<span>Metadata</span><span>Tools</span></div>
@@ -1040,7 +1146,7 @@ function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCop
               <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "id")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
               <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "name")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
               <Button variant="outline" size="icon-sm" onClick={() => onDownload(asset)} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Download" aria-label="Download"><Download /></Button>
-              <Button variant="destructive" size="icon-sm" onClick={() => onRemove(asset)} title="Remove" aria-label="Remove"><Trash2 /></Button>
+              {canManage && <Button variant="destructive" size="icon-sm" onClick={() => onRemove(asset)} title="Remove" aria-label="Remove"><Trash2 /></Button>}
             </div>
           </div>
         ))}
@@ -1074,7 +1180,7 @@ function ConversionStatus({ asset }: { asset: Asset }) {
   );
 }
 
-function LocalizationTable({ kind, rows, title, token, onAddRecord, onClearAudio, onCopy, onKeyUpdate, onRemove, onReplaceAudio, onUpdate, onTranslate }: { kind: LocalizationKind; rows: LocalizationRow[]; title: string; token: string; onAddRecord: (kind: LocalizationKind) => void; onClearAudio: (rowIndex: number, language: string) => void; onCopy: (value: string, label: string) => void; onKeyUpdate: (kind: LocalizationKind, rowIndex: number, key: string) => void; onRemove: (kind: LocalizationKind, rowIndex: number) => void; onReplaceAudio: (rowIndex: number, language: string, file: File) => void; onUpdate: (kind: LocalizationKind, rowIndex: number, language: string, value: string) => void; onTranslate: (kind: LocalizationKind) => void }) {
+function LocalizationTable({ canManage, kind, rows, title, token, onAddRecord, onClearAudio, onCopy, onKeyUpdate, onRemove, onReplaceAudio, onUpdate, onTranslate }: { canManage: boolean; kind: LocalizationKind; rows: LocalizationRow[]; title: string; token: string; onAddRecord: (kind: LocalizationKind) => void; onClearAudio: (rowIndex: number, language: string) => void; onCopy: (value: string, label: string) => void; onKeyUpdate: (kind: LocalizationKind, rowIndex: number, key: string) => void; onRemove: (kind: LocalizationKind, rowIndex: number) => void; onReplaceAudio: (rowIndex: number, language: string, file: File) => void; onUpdate: (kind: LocalizationKind, rowIndex: number, language: string, value: string) => void; onTranslate: (kind: LocalizationKind) => void }) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set());
   const audioRef = useRef<HTMLAudioElement>(null);
   const replaceAudioInputRef = useRef<HTMLInputElement>(null);
@@ -1130,18 +1236,18 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onClearAudio
     return (
       <div className={isAudioLocalization ? "localized-value audio-localized-value" : "localized-value"}>
         <span>{language.toUpperCase()}</span>
-        <Input className="localization-value" value={value} onChange={event => onUpdate(kind, rowIndex, language, event.target.value)} />
+        <Input className="localization-value" value={value} readOnly={!canManage} onChange={event => onUpdate(kind, rowIndex, language, event.target.value)} />
         {isAudioLocalization && (
           <div className="audio-value-tools">
             <Button variant="outline" size="icon-sm" disabled={!value.trim()} onClick={() => void toggleLocalizationAudio(playKey, value)} title={isPlaying ? "Pause audio preview" : "Play audio preview"} aria-label={isPlaying ? `Pause ${language.toUpperCase()} audio preview` : `Play ${language.toUpperCase()} audio preview`}>
               {isPlaying ? <Pause /> : <Play />}
             </Button>
-            <Button variant="outline" size="icon-sm" onClick={() => requestAudioReplacement(rowIndex, language)} title="Replace audio file" aria-label={`Replace ${language.toUpperCase()} audio file`}>
+            {canManage && <Button variant="outline" size="icon-sm" onClick={() => requestAudioReplacement(rowIndex, language)} title="Replace audio file" aria-label={`Replace ${language.toUpperCase()} audio file`}>
               <Upload />
-            </Button>
-            <Button variant="outline" size="icon-sm" disabled={value === "default.ogg"} onClick={() => onClearAudio(rowIndex, language)} title="Use default audio" aria-label={`Use default audio for ${language.toUpperCase()}`}>
+            </Button>}
+            {canManage && <Button variant="outline" size="icon-sm" disabled={value === "default.ogg"} onClick={() => onClearAudio(rowIndex, language)} title="Use default audio" aria-label={`Use default audio for ${language.toUpperCase()}`}>
               <Trash2 />
-            </Button>
+            </Button>}
           </div>
         )}
       </div>
@@ -1152,9 +1258,9 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onClearAudio
     <Card className="table-shell">
       <div className="table-toolbar localization-tools">
         <div><h2>{title}</h2><p>Rows are fetched from the SQLite localization table.</p></div>
-        <div className="table-actions">
+        {canManage && <div className="table-actions">
           <Button onClick={() => onAddRecord(kind)}><Plus />Add record</Button>
-        </div>
+        </div>}
       </div>
       <div className="localization-table">
         {isAudioLocalization && <audio ref={audioRef} className="hidden" onEnded={() => setPlayingLocalizationKey(null)} />}
@@ -1167,7 +1273,7 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onClearAudio
             <div className="localization-row-group" key={rowKey}>
               <div className="localization-grid" style={{ gridTemplateColumns }}>
                 <span className="row-no">{rows.length - rowIndex}</span>
-                <Input className="key-input" value={row.key} onChange={event => onKeyUpdate(kind, rowIndex, event.target.value)} aria-label={`Localization key ${rowIndex + 1}`} />
+                <Input className="key-input" value={row.key} readOnly={!canManage} onChange={event => onKeyUpdate(kind, rowIndex, event.target.value)} aria-label={`Localization key ${rowIndex + 1}`} />
                 {localizedValue(rowKey, rowIndex, "en")}
                 <div className="toolset localization-toolset">
                   <Button variant="outline" size="icon-sm" onClick={() => setExpandedRows(current => {
@@ -1178,7 +1284,7 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onClearAudio
                   })} title={isExpanded ? "Hide languages" : "Show languages"} aria-label={isExpanded ? "Hide languages" : "Show languages"}><ChevronDown className={isExpanded ? "rotate-icon" : undefined} /></Button>
                   <Button variant="outline" size="icon-sm" onClick={() => onCopy(`/localization/id/${row.key}?token=${encodeURIComponent(token)}`, `Copied localization id: ${row.key}`)} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
                   <Button variant="outline" size="icon-sm" onClick={() => onCopy(`/localization/name/${row.key.replaceAll(".", "/")}?token=${encodeURIComponent(token)}`, `Copied localization name: ${row.key}`)} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
-                  <Button variant="destructive" size="icon-sm" onClick={() => onRemove(kind, rowIndex)} title="Remove" aria-label="Remove"><Trash2 /></Button>
+                  {canManage && <Button variant="destructive" size="icon-sm" onClick={() => onRemove(kind, rowIndex)} title="Remove" aria-label="Remove"><Trash2 /></Button>}
                 </div>
               </div>
               {isExpanded && secondaryLanguages.map(language => (
@@ -1194,19 +1300,57 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onClearAudio
         })}
         {!rows.length && <div className="empty-state"><Plus /><span>No localization rows in the database for this tab yet.</span></div>}
       </div>
-      {kind === "textLocalization" && <div className="bottom-actions"><Button onClick={() => onTranslate(kind)}><WandSparkles />AI Translate</Button></div>}
+      {canManage && kind === "textLocalization" && <div className="bottom-actions"><Button onClick={() => onTranslate(kind)}><WandSparkles />AI Translate</Button></div>}
     </Card>
   );
 }
 
-function SettingPanel({ assetToken, gptApiToken, projectName, onCopy, onDeleteProject, onGenerateToken, onGptApiTokenChange }: { assetToken: string; gptApiToken: string; projectName: string; onCopy: (value: string, label: string) => void; onDeleteProject: () => void; onGenerateToken: () => void; onGptApiTokenChange: (value: string) => void }) {
+function AccountManagerModal({ currentUser, users, passwordForm, newAccountForm, onClose, onCreateAccount, onNewAccountFormChange, onPasswordChange, onPasswordFormChange, onRemoveAccount }: { currentUser: AuthUser; users: AuthUser[]; passwordForm: { currentPassword: string; newPassword: string; confirmPassword: string }; newAccountForm: { username: string; password: string; role: Exclude<UserRole, "admin"> }; onClose: () => void; onCreateAccount: () => void; onNewAccountFormChange: Dispatch<SetStateAction<{ username: string; password: string; role: Exclude<UserRole, "admin"> }>>; onPasswordChange: () => void; onPasswordFormChange: Dispatch<SetStateAction<{ currentPassword: string; newPassword: string; confirmPassword: string }>>; onRemoveAccount: (user: AuthUser) => void }) {
+  const canManageAccounts = currentUser.role === "admin" || currentUser.role === "manager";
+  const canRemove = (user: AuthUser) => currentUser.id !== user.id && (currentUser.role === "admin" || user.role === "readonly");
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="project-modal account-modal" role="dialog" aria-modal="true" aria-label="Manage account">
+        <div><h2>Manage account</h2><p>{currentUser.username} · {currentUser.role}</p></div>
+        <form className="account-section" onSubmit={event => { event.preventDefault(); void onPasswordChange(); }}>
+          <label>Current password<Input type="password" value={passwordForm.currentPassword} onChange={event => onPasswordFormChange(current => ({ ...current, currentPassword: event.target.value }))} /></label>
+          <label>New password<Input type="password" minLength={8} value={passwordForm.newPassword} onChange={event => onPasswordFormChange(current => ({ ...current, newPassword: event.target.value }))} /></label>
+          <label>Confirm password<Input type="password" minLength={8} value={passwordForm.confirmPassword} onChange={event => onPasswordFormChange(current => ({ ...current, confirmPassword: event.target.value }))} /></label>
+          <Button type="submit">Change password</Button>
+        </form>
+        {canManageAccounts && (
+          <>
+            <form className="account-section" onSubmit={event => { event.preventDefault(); void onCreateAccount(); }}>
+              <label>Username<Input value={newAccountForm.username} onChange={event => onNewAccountFormChange(current => ({ ...current, username: event.target.value }))} /></label>
+              <label>Password<Input type="password" minLength={8} value={newAccountForm.password} onChange={event => onNewAccountFormChange(current => ({ ...current, password: event.target.value }))} /></label>
+              <label>Role<select value={newAccountForm.role} onChange={event => onNewAccountFormChange(current => ({ ...current, role: event.target.value as Exclude<UserRole, "admin"> }))}><option value="readonly">Readonly</option><option value="manager">Manager</option></select></label>
+              <Button type="submit"><Plus />Create account</Button>
+            </form>
+            <div className="account-list">
+              {users.map(user => (
+                <div className="account-row" key={user.id}>
+                  <div><strong>{user.username}</strong><span>{user.role}</span></div>
+                  <Button variant="destructive" size="sm" disabled={!canRemove(user)} onClick={() => void onRemoveAccount(user)}><Trash2 />Remove</Button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <div className="modal-actions"><Button type="button" variant="outline" onClick={onClose}>Close</Button></div>
+      </div>
+    </div>
+  );
+}
+
+function SettingPanel({ canManage, assetToken, gptApiToken, projectName, onCopy, onDeleteProject, onGenerateToken, onGptApiTokenChange }: { canManage: boolean; assetToken: string; gptApiToken: string; projectName: string; onCopy: (value: string, label: string) => void; onDeleteProject: () => void; onGenerateToken: () => void; onGptApiTokenChange: (value: string) => void }) {
   return (
     <Card className="table-shell settings-panel">
       <div className="table-toolbar"><div><h2>Settings</h2><p>Settings are loaded from the SQLite project_settings table.</p></div></div>
       <div className="settings-grid">
-        <div className="setting-row"><div><strong>Asset token</strong><span>Required for every asset and localization request.</span></div><Input value={assetToken} readOnly aria-label="Read only asset token" /><div className="setting-actions"><Button variant="outline" onClick={onGenerateToken}><WandSparkles />Generate</Button><Button variant="outline" onClick={() => onCopy(assetToken, "Copied asset token")}><Copy />Copy</Button></div></div>
-        <div className="setting-row"><div><strong>GPT_API_TOKEN</strong><span>Used by AI Translate for localization rows.</span></div><Input value={gptApiToken} onChange={event => onGptApiTokenChange(event.target.value)} placeholder="gpt_tok_translate..." aria-label="GPT API token" /><Button variant="outline" onClick={() => onCopy(gptApiToken, "Copied GPT_API_TOKEN")}><Copy />Copy</Button></div>
-        <div className="setting-row danger-setting-row"><div><strong>Delete project</strong><span>Delete {projectName} and all database rows in this project.</span></div><div className="danger-setting-copy">This action requires typing the project name to confirm.</div><Button variant="destructive" onClick={onDeleteProject}><Trash2 />Delete project</Button></div>
+        <div className="setting-row"><div><strong>Asset token</strong><span>Required for unauthenticated asset and localization requests.</span></div><Input value={assetToken} readOnly aria-label="Read only asset token" /><div className="setting-actions">{canManage && <Button variant="outline" onClick={onGenerateToken}><WandSparkles />Generate</Button>}<Button variant="outline" onClick={() => onCopy(assetToken, "Copied asset token")}><Copy />Copy</Button></div></div>
+        <div className="setting-row"><div><strong>GPT_API_TOKEN</strong><span>Used by AI Translate for localization rows.</span></div><Input value={gptApiToken} readOnly={!canManage} onChange={event => onGptApiTokenChange(event.target.value)} placeholder="gpt_tok_translate..." aria-label="GPT API token" /><Button variant="outline" onClick={() => onCopy(gptApiToken, "Copied GPT_API_TOKEN")}><Copy />Copy</Button></div>
+        {canManage && <div className="setting-row danger-setting-row"><div><strong>Delete project</strong><span>Delete {projectName} and all database rows in this project.</span></div><div className="danger-setting-copy">This action requires typing the project name to confirm.</div><Button variant="destructive" onClick={onDeleteProject}><Trash2 />Delete project</Button></div>}
       </div>
     </Card>
   );

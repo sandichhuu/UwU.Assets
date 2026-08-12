@@ -24,10 +24,16 @@ import {
 } from "./db/assets";
 import {
   createSession,
+  createUser,
+  deleteUser,
   deleteSession,
   ensureDefaultAdminUser,
+  getUserById,
   getSessionUser,
+  listUsers,
   updateUserPassword,
+  type AuthUser,
+  type UserRole,
   verifyUserPassword,
 } from "./db/auth";
 import { getDatabasePath } from "./db/database";
@@ -127,11 +133,21 @@ function currentUser(req: Request) {
   return sessionId ? getSessionUser(sessionId) : null;
 }
 
-function passwordChangeError(req: Request) {
+function authError(req: Request, minimumRole: UserRole = "readonly") {
   const user = currentUser(req);
   if (!user) return Response.json({ error: "Login required" }, { status: 401 });
   if (user.mustChangePassword) return Response.json({ error: "Password change required" }, { status: 403 });
+  if (!hasRole(user, minimumRole)) return Response.json({ error: "Permission denied" }, { status: 403 });
   return null;
+}
+
+function hasRole(user: AuthUser, minimumRole: UserRole) {
+  const levels: Record<UserRole, number> = { readonly: 0, manager: 1, admin: 2 };
+  return levels[user.role] >= levels[minimumRole];
+}
+
+function isAccountManager(user: AuthUser) {
+  return user.role === "admin" || user.role === "manager";
 }
 
 async function convertWithFfmpeg(content: Buffer, sourceName: string, outputExtension: string, args: string[], errorMessage: string) {
@@ -239,7 +255,8 @@ async function assetResponse(req: Request, mode: "id" | "name", key: string) {
 
   const token = new URL(req.url).searchParams.get("token");
   const settings = getProjectSettings(asset.projectId);
-  if (!token || token !== settings.assetToken) {
+  const user = currentUser(req);
+  if ((!user || user.mustChangePassword) && (!token || token !== settings.assetToken)) {
     return Response.json({ error: "Invalid asset token" }, { status: 401 });
   }
 
@@ -345,6 +362,54 @@ const server = serve({
       },
     },
 
+    "/api/auth/users": {
+      async GET(req) {
+        const requester = currentUser(req);
+        if (!requester) return Response.json({ error: "Login required" }, { status: 401 });
+        if (requester.mustChangePassword) return Response.json({ error: "Password change required" }, { status: 403 });
+        if (!isAccountManager(requester)) return Response.json({ error: "Permission denied" }, { status: 403 });
+        return Response.json({ users: listUsers() });
+      },
+      async POST(req) {
+        const requester = currentUser(req);
+        if (!requester) return Response.json({ error: "Login required" }, { status: 401 });
+        if (requester.mustChangePassword) return Response.json({ error: "Password change required" }, { status: 403 });
+        if (!isAccountManager(requester)) return Response.json({ error: "Permission denied" }, { status: 403 });
+
+        const body = (await req.json()) as { username?: string; password?: string; role?: UserRole };
+        const username = body.username?.trim() ?? "";
+        const password = body.password ?? "";
+        const role = body.role === "manager" ? "manager" : body.role === "readonly" ? "readonly" : null;
+        if (!username) return Response.json({ error: "Username is required" }, { status: 400 });
+        if (password.length < 8) return Response.json({ error: "Password must be at least 8 characters" }, { status: 400 });
+        if (!role) return Response.json({ error: "Role must be readonly or manager" }, { status: 400 });
+        if (listUsers().some(user => user.username.toLowerCase() === username.toLowerCase())) {
+          return Response.json({ error: "Username already exists" }, { status: 409 });
+        }
+
+        const user = await createUser(username, password, role);
+        return Response.json({ user }, { status: 201 });
+      },
+    },
+
+    "/api/auth/users/:userId": {
+      async DELETE(req) {
+        const requester = currentUser(req);
+        if (!requester) return Response.json({ error: "Login required" }, { status: 401 });
+        if (requester.mustChangePassword) return Response.json({ error: "Password change required" }, { status: 403 });
+        if (!isAccountManager(requester)) return Response.json({ error: "Permission denied" }, { status: 403 });
+        if (requester.id === req.params.userId) return Response.json({ error: "You cannot delete your own account" }, { status: 400 });
+
+        const target = getUserById(req.params.userId);
+        if (!target) return Response.json({ error: "Account not found" }, { status: 404 });
+        if (requester.role === "manager" && target.role !== "readonly") {
+          return Response.json({ error: "Managers can only remove readonly accounts" }, { status: 403 });
+        }
+
+        return Response.json({ deleted: deleteUser(target.id) });
+      },
+    },
+
     "/api/auth/logout": {
       async POST(req) {
         const sessionId = parseCookies(req).uwu_session;
@@ -362,7 +427,7 @@ const server = serve({
 
     "/api/storage-usage": {
       async GET(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req);
         if (unauthorized) return unauthorized;
         return Response.json({ bytes: storageUsageBytes(), disk: diskStorage() });
       },
@@ -370,12 +435,12 @@ const server = serve({
 
     "/api/projects": {
       async GET(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req);
         if (unauthorized) return unauthorized;
         return Response.json({ projects: listProjects() });
       },
       async POST(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
         const body = (await req.json()) as { name?: string };
         const name = body.name?.trim();
@@ -392,7 +457,7 @@ const server = serve({
 
     "/api/projects/:projectId": {
       async GET(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req);
         if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -411,7 +476,7 @@ const server = serve({
         });
       },
       async DELETE(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
         return Response.json({ deleted: deleteProject(req.params.projectId) });
       },
@@ -419,7 +484,7 @@ const server = serve({
 
     "/api/projects/:projectId/assets": {
       async GET(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req);
         if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -432,7 +497,7 @@ const server = serve({
         return Response.json({ assets: listAssets(project.id, kind ?? undefined, assetPageParams(req)) });
       },
       async POST(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -494,7 +559,7 @@ const server = serve({
 
     "/api/assets/:assetId": {
       async DELETE(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
         const asset = getAssetById(req.params.assetId);
         const deleted = deleteAsset(req.params.assetId);
@@ -524,7 +589,7 @@ const server = serve({
 
     "/api/projects/:projectId/localization/:kind": {
       async GET(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req);
         if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -535,7 +600,7 @@ const server = serve({
         return Response.json({ rows: listLocalization(project.id, kind) });
       },
       async POST(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -561,7 +626,7 @@ const server = serve({
 
     "/api/localization/:localizationId": {
       async DELETE(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
         return Response.json({ deleted: deleteLocalization(req.params.localizationId) });
       },
@@ -569,7 +634,7 @@ const server = serve({
 
     "/api/projects/:projectId/settings": {
       async GET(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req);
         if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -577,7 +642,7 @@ const server = serve({
         return Response.json({ settings: getProjectSettings(project.id) });
       },
       async PUT(req) {
-        const unauthorized = passwordChangeError(req);
+        const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
