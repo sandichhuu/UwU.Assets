@@ -1249,8 +1249,8 @@ function AuditLogTable({ logs, isLoading }: { logs: AuditLog[]; isLoading: boole
             <span>{formatAuditTime(log.createdAt)}</span>
             <div><strong>{log.actorUsername}</strong><small>{log.actorRole}</small></div>
             <strong>{log.action}</strong>
-            <div><span>{log.targetName ?? log.targetType}</span><small>{log.targetType}</small></div>
-            <small>{auditDetailsLabel(log.details)}</small>
+            <div className="audit-target"><span>{log.targetName ?? log.targetType}</span><small>{log.targetType}</small></div>
+            <small className="audit-details">{auditDetailsLabel(log.details)}</small>
           </div>
         ))}
         {!logs.length && <div className="empty-state"><History /><span>{isLoading ? "Loading audit logs..." : "No audit logs for this project yet."}</span></div>}
