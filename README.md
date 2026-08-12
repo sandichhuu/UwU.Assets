@@ -47,3 +47,6 @@ volumes:
 
 ### Preview
 <img width="1919" height="948" alt="image" src="https://github.com/user-attachments/assets/7ce8ed21-18a5-4fae-92f5-ef1f967235b9" />
+
+### Support
+Join my [Discord](https://discord.gg/UB7YmneVeh) channel.
