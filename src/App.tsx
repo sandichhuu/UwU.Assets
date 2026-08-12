@@ -2,6 +2,7 @@ import {
   ChevronDown,
   Copy,
   Download,
+  HardDrive,
   FileAudio,
   FileImage,
   FileVideo,
@@ -68,6 +69,14 @@ type PreviewAsset = {
   originalUrl: string;
 };
 
+type StorageUsage = {
+  bytes: number;
+  disk: {
+    availableBytes: number;
+    totalBytes: number;
+  };
+};
+
 const assetPageSize = 50;
 const selectedProjectStorageKey = "uwu-assets:selectedProjectId";
 const selectedTabStorageKey = "uwu-assets:selectedTab";
@@ -84,8 +93,17 @@ function emptyProject(id: string, name: string): Project {
 }
 
 function formatBytes(bytes: number) {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = Math.max(0, bytes) / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  if (unitIndex === 0) return `${Math.max(1, Math.round(value))} ${units[unitIndex]}`;
+  return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`;
 }
 
 function isAssetTab(tab: Tab): tab is AssetKind {
@@ -215,6 +233,7 @@ export function App() {
   const [deleteAssetTarget, setDeleteAssetTarget] = useState<Asset | null>(null);
   const [assetHasMore, setAssetHasMore] = useState<Record<AssetKind, boolean>>({ Image: true, Audio: true, Video: true });
   const [isLoadingMoreAssets, setIsLoadingMoreAssets] = useState(false);
+  const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
 
   const activeProject = projects.find(project => project.id === activeProjectId) ?? projects[0];
   const activeLocalizationKind: LocalizationKind | null =
@@ -261,6 +280,14 @@ export function App() {
     } else {
       setActiveProjectId("");
     }
+    await loadStorageUsage();
+  };
+
+  const loadStorageUsage = async () => {
+    const response = await fetch("/api/storage-usage");
+    if (!response.ok) throw new Error("Could not load storage usage");
+    const data = (await response.json()) as StorageUsage;
+    setStorageUsage(data);
   };
 
   useEffect(() => {
@@ -325,6 +352,7 @@ export function App() {
     setActiveProjectId(project.id);
     setActiveTab("Image");
     setIsProjectDialogOpen(false);
+    await loadStorageUsage();
     showToast.success(`Created ${project.name} in database`);
   };
 
@@ -336,6 +364,7 @@ export function App() {
     setProjects(remaining);
     setActiveProjectId(remaining[0]?.id ?? "");
     setIsDeleteProjectDialogOpen(false);
+    await loadStorageUsage();
     showToast.success(remaining.length ? `Deleted ${activeProject.name} from database` : "No projects found in SQLite database");
   };
 
@@ -390,6 +419,7 @@ export function App() {
 
       showProgress("Refreshing assets", "Loading saved database rows");
       await loadProject(activeProject.id);
+      await loadStorageUsage();
       completedSteps = totalSteps;
       setUploadProgress({ title: "Upload complete", detail: `Saved ${savedCount} ${kind.toLowerCase()} asset(s)`, percent: 100 });
       showToast.success(`Saved ${savedCount} ${kind.toLowerCase()} asset(s) to database`);
@@ -406,6 +436,7 @@ export function App() {
     if (!activeProject) return;
     await fetch(`/api/assets/${encodeURIComponent(asset.id)}`, { method: "DELETE" });
     await loadProject(activeProject.id);
+    await loadStorageUsage();
     showToast.success(`Removed ${asset.name} from database`);
   };
 
@@ -459,6 +490,7 @@ export function App() {
       setUploadProgress({ title: "Saving localization", detail: `${currentRow.key} ${language.toUpperCase()}`, percent: 80 });
       await saveLocalization("audioLocalization", row);
       await loadProject(activeProject.id);
+      await loadStorageUsage();
       showToast.success(`Replaced ${language.toUpperCase()} audio for ${currentRow.key}`);
     } catch (error) {
       showToast.error(error instanceof Error ? error.message : String(error));
@@ -508,6 +540,7 @@ export function App() {
       values: Object.fromEntries(languages.map(language => [language, defaultValue])),
     });
     await loadProject(activeProject.id);
+    await loadStorageUsage();
     showToast.success("Added localization record to database");
   };
 
@@ -523,6 +556,7 @@ export function App() {
     });
     await Promise.all(rows.map(row => saveLocalization(kind, row)));
     await loadProject(activeProject.id);
+    await loadStorageUsage();
     showToast.success("Saved AI translations to database");
   };
 
@@ -555,7 +589,7 @@ export function App() {
             <div className="brand-mark">UwU</div>
             <div>
               <p>Asset Console</p>
-              <p className="text-xs text-slate-300">database-backed</p>
+              <DiskStorageLabel storageUsage={storageUsage} />
             </div>
           </div>
           <Button className="project-create" onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
@@ -597,7 +631,7 @@ export function App() {
           <div className="brand-mark">UwU</div>
           <div>
             <p>Asset Console</p>
-            <p className="text-xs text-slate-300">database-backed</p>
+            <DiskStorageLabel storageUsage={storageUsage} />
           </div>
         </div>
         <Button className="project-create" onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
@@ -623,7 +657,7 @@ export function App() {
           <Card><strong>{totalAssets}</strong><span>Total assets</span></Card>
           <Card><strong>{tabAssetCount}</strong><span>Rows in view</span></Card>
           <Card><strong>{languages.length}</strong><span>Localization languages</span></Card>
-          <Card><strong>SQLite</strong><span>Data source</span></Card>
+          <Card><strong>{storageUsage === null ? "..." : formatBytes(storageUsage.bytes)}</strong><span>Storage usage</span></Card>
         </section>
         <nav className="tabbar" aria-label="Asset tabs">
           {tabs.map(tab => {
@@ -678,6 +712,16 @@ export function App() {
       )}
       <Toaster position="top-right" richColors closeButton />
     </main>
+  );
+}
+
+function DiskStorageLabel({ storageUsage }: { storageUsage: StorageUsage | null }) {
+  const label = storageUsage ? `${formatBytes(storageUsage.disk.availableBytes)} / ${formatBytes(storageUsage.disk.totalBytes)}` : "...";
+  return (
+    <p className="disk-storage-label" title="Available disk storage">
+      <HardDrive />
+      <span>{label}</span>
+    </p>
   );
 }
 

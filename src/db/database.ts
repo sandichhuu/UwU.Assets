@@ -7,6 +7,7 @@ const databasePathEnvName = "SQLITE_DATABASE_PATH";
 
 let database: Database | null = null;
 let databaseFileExistedBeforeOpen = false;
+let resolvedDatabasePath: string | null = null;
 
 export function getDatabase() {
   if (database) return database;
@@ -20,7 +21,7 @@ export function getDatabase() {
     throw new Error(`${databasePathEnvName} must point to a SQLite database file, not an in-memory database.`);
   }
 
-  const resolvedDatabasePath = resolve(databasePath);
+  resolvedDatabasePath = resolve(databasePath);
   databaseFileExistedBeforeOpen = existsSync(resolvedDatabasePath);
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -41,8 +42,17 @@ export function isFirstDatabaseLaunch() {
   return !databaseFileExistedBeforeOpen;
 }
 
+export function getDatabasePath() {
+  getDatabase();
+  if (!resolvedDatabasePath) {
+    throw new Error(`${databasePathEnvName} could not be resolved.`);
+  }
+  return resolvedDatabasePath;
+}
+
 export function closeDatabase() {
   database?.close(true);
   database = null;
   databaseFileExistedBeforeOpen = false;
+  resolvedDatabasePath = null;
 }

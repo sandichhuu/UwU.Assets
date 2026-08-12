@@ -1,5 +1,5 @@
 import { serve } from "bun";
-import { existsSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, statfsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import index from "./index.html";
@@ -21,6 +21,7 @@ import {
   type AssetKind,
   type LocalizationKind,
 } from "./db/assets";
+import { getDatabasePath } from "./db/database";
 import { ensureSeedData } from "./db/seed";
 
 ensureSeedData();
@@ -56,6 +57,33 @@ function webmAssetName(name: string) {
 
 function isSafeAssetName(name: string) {
   return name === name.replaceAll("\\", "/").split("/").pop();
+}
+
+function fileSize(path: string) {
+  return existsSync(path) ? statSync(path).size : 0;
+}
+
+function directorySize(path: string): number {
+  if (!existsSync(path)) return 0;
+  const stats = statSync(path);
+  if (!stats.isDirectory()) return stats.size;
+
+  return readdirSync(path).reduce((total, entry) => total + directorySize(join(path, entry)), 0);
+}
+
+function storageUsageBytes() {
+  const databasePath = getDatabasePath();
+  const sqliteBytes = fileSize(databasePath) + fileSize(`${databasePath}-wal`) + fileSize(`${databasePath}-shm`);
+  const assetBytes = directorySize(assetStoragePath);
+  return sqliteBytes + assetBytes;
+}
+
+function diskStorage() {
+  const stats = statfsSync(assetStoragePath);
+  return {
+    availableBytes: stats.bavail * stats.bsize,
+    totalBytes: stats.blocks * stats.bsize,
+  };
 }
 
 async function convertWithFfmpeg(content: Buffer, sourceName: string, outputExtension: string, args: string[], errorMessage: string) {
@@ -155,6 +183,12 @@ const server = serve({
       return Response.json({
         message: `Hello, ${name}!`,
       });
+    },
+
+    "/api/storage-usage": {
+      async GET() {
+        return Response.json({ bytes: storageUsageBytes(), disk: diskStorage() });
+      },
     },
 
     "/api/projects": {
