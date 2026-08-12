@@ -115,6 +115,7 @@ const listAssetsQuery = db.query(`
   WHERE project_id = $projectId
     AND ($kind IS NULL OR kind = $kind)
   ORDER BY updated_at DESC, name ASC
+  LIMIT $limit OFFSET $offset
 `);
 
 const getAssetByIdQuery = db.query(`
@@ -215,8 +216,8 @@ export function createAsset(input: {
   );
 }
 
-export function listAssets(projectId: string, kind?: AssetKind) {
-  return (listAssetsQuery.all({ projectId, kind: kind ?? null }) as AssetRow[]).map(mapAsset);
+export function listAssets(projectId: string, kind?: AssetKind, options?: { limit?: number; offset?: number }) {
+  return (listAssetsQuery.all({ projectId, kind: kind ?? null, limit: options?.limit ?? -1, offset: options?.offset ?? 0 }) as AssetRow[]).map(mapAsset);
 }
 
 export function getAssetById(id: string) {

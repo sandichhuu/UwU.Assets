@@ -64,6 +64,7 @@ type PreviewAsset = {
   originalUrl: string;
 };
 
+const assetPageSize = 50;
 const tabs: Tab[] = ["Image", "Audio", "Video", "Audio Localization", "Text Localization", "Settings"];
 const languages = ["en", "vi", "ja", "ko", "th", "zh"];
 const primaryLanguage = "en";
@@ -85,8 +86,8 @@ function isAssetTab(tab: Tab): tab is AssetKind {
   return tab === "Image" || tab === "Audio" || tab === "Video";
 }
 
-function mapProjectPayload(data: any): Project {
-  const mapAsset = (asset: any): Asset => ({
+function mapAssetPayload(asset: any): Asset {
+  return {
     id: asset.id,
     originalName: asset.originalName,
     name: asset.name,
@@ -95,8 +96,10 @@ function mapProjectPayload(data: any): Project {
     mimeType: asset.mimeType,
     metadata: asset.metadata ?? [],
     updatedAt: asset.updatedAt,
-  });
+  };
+}
 
+function mapProjectPayload(data: any): Project {
   const mapLocalization = (row: any): LocalizationRow => ({
     id: row.id,
     key: row.key,
@@ -107,9 +110,9 @@ function mapProjectPayload(data: any): Project {
     id: data.project.id,
     name: data.project.name,
     assets: {
-      Image: (data.assets.Image ?? []).map(mapAsset),
-      Audio: (data.assets.Audio ?? []).map(mapAsset),
-      Video: (data.assets.Video ?? []).map(mapAsset),
+      Image: (data.assets.Image ?? []).map(mapAssetPayload),
+      Audio: (data.assets.Audio ?? []).map(mapAssetPayload),
+      Video: (data.assets.Video ?? []).map(mapAssetPayload),
     },
     audioLocalization: (data.audioLocalization ?? []).map(mapLocalization),
     textLocalization: (data.textLocalization ?? []).map(mapLocalization),
@@ -198,6 +201,8 @@ export function App() {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [previewAsset, setPreviewAsset] = useState<PreviewAsset | null>(null);
   const [deleteAssetTarget, setDeleteAssetTarget] = useState<Asset | null>(null);
+  const [assetHasMore, setAssetHasMore] = useState<Record<AssetKind, boolean>>({ Image: true, Audio: true, Video: true });
+  const [isLoadingMoreAssets, setIsLoadingMoreAssets] = useState(false);
 
   const activeProject = projects.find(project => project.id === activeProjectId) ?? projects[0];
   const activeLocalizationKind: LocalizationKind | null =
@@ -220,6 +225,11 @@ export function App() {
     const data = await response.json();
     const project = mapProjectPayload(data);
     setProjects(current => current.map(item => (item.id === project.id ? project : item)));
+    setAssetHasMore({
+      Image: project.assets.Image.length === assetPageSize,
+      Audio: project.assets.Audio.length === assetPageSize,
+      Video: project.assets.Video.length === assetPageSize,
+    });
     setToken(data.settings.assetToken);
     setGptApiToken(data.settings.gptApiToken);
     return project;
@@ -247,6 +257,30 @@ export function App() {
   useEffect(() => {
     if (activeProjectId) loadProject(activeProjectId).catch(error => setToast(String(error)));
   }, [activeProjectId]);
+
+  const loadMoreAssets = async (kind: AssetKind) => {
+    if (!activeProject || isLoadingMoreAssets || !assetHasMore[kind]) return;
+    setIsLoadingMoreAssets(true);
+    try {
+      const offset = activeProject.assets[kind].length;
+      const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/assets?kind=${encodeURIComponent(kind)}&offset=${offset}&limit=${assetPageSize}`);
+      if (!response.ok) throw new Error(`Could not load more ${kind.toLowerCase()} assets`);
+      const data = (await response.json()) as { assets: any[] };
+      const nextAssets = data.assets.map(mapAssetPayload);
+      setProjects(current =>
+        current.map(project =>
+          project.id === activeProject.id
+            ? { ...project, assets: { ...project.assets, [kind]: [...project.assets[kind], ...nextAssets] } }
+            : project,
+        ),
+      );
+      setAssetHasMore(current => ({ ...current, [kind]: nextAssets.length === assetPageSize }));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsLoadingMoreAssets(false);
+    }
+  };
 
   const assetUrl = (asset: Asset, mode: "id" | "name") => {
     const key = mode === "id" ? asset.id : asset.name;
@@ -545,7 +579,7 @@ export function App() {
         ) : activeLocalizationKind ? (
           <LocalizationTable kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onUpdate={updateLocalization} onTranslate={aiTranslate} />
         ) : (
-          <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={asset => `${assetUrl(asset, "name")}&preview=1`} onPreview={asset => setPreviewAsset({ asset, previewUrl: `${assetUrl(asset, "name")}&preview=1`, originalUrl: assetUrl(asset, "name") })} />
+          <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={asset => `${assetUrl(asset, "name")}&preview=1`} onPreview={asset => setPreviewAsset({ asset, previewUrl: `${assetUrl(asset, "name")}&preview=1`, originalUrl: assetUrl(asset, "name") })} />
         )}
         <div className="status-bar"><span>{toast}</span><span>All visible projects, assets, localization rows, and settings are loaded from SQLite.</span></div>
       </section>
@@ -621,10 +655,11 @@ function ImagePreviewModal({ preview, onClose }: { preview: PreviewAsset; onClos
 function ConfirmAssetDeleteModal({ asset, onCancel, onConfirm }: { asset: Asset; onCancel: () => void; onConfirm: () => void }) {
   return (
     <div className="modal-backdrop" role="presentation">
-      <div className="project-modal danger-modal" role="dialog" aria-modal="true" aria-label={`Delete ${asset.name}`}>
+      <div className="project-modal compact-modal danger-modal" role="dialog" aria-modal="true" aria-label={`Delete ${asset.name}`}>
         <div>
           <div className="modal-title-row"><TriangleAlert /><h2>Delete asset</h2></div>
-          <p>Remove <strong>{asset.name}</strong> from this project?</p>
+          <p>Remove this asset from the project?</p>
+          <div className="compact-modal-asset-name">{asset.name}</div>
         </div>
         <div className="modal-actions">
           <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
@@ -635,9 +670,21 @@ function ConfirmAssetDeleteModal({ asset, onCancel, onConfirm }: { asset: Asset;
   );
 }
 
-function AssetTable({ assets, assetKind, onCopy, onDownload, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
+function AssetTable({ assets, assetKind, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   const isImageTable = assetKind === "Image";
+
+  useEffect(() => {
+    const element = loadMoreRef.current;
+    if (!element || !hasMore) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0]?.isIntersecting && !isLoadingMore) onLoadMore(assetKind);
+    }, { rootMargin: "320px 0px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [assetKind, hasMore, isLoadingMore, onLoadMore]);
+
   return (
     <Card className="table-shell">
       <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div><div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div></div>
@@ -662,6 +709,11 @@ function AssetTable({ assets, assetKind, onCopy, onDownload, onUpload, onRemove,
           </div>
         ))}
         {!assets.length && <div className="empty-state"><Plus /><span>No assets in the database for this tab yet.</span></div>}
+        {assets.length > 0 && (
+          <div className="asset-load-more" ref={loadMoreRef}>
+            {isLoadingMore ? "Loading more assets..." : hasMore ? "Scroll for more assets" : "All newest assets loaded"}
+          </div>
+        )}
       </div>
     </Card>
   );

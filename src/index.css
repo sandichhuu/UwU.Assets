@@ -23,7 +23,8 @@
   position: relative;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .asset-app.sidebar-collapsed {
@@ -38,6 +39,7 @@
   display: flex;
   flex-direction: column;
   gap: 22px;
+  height: 100vh;
   overflow: hidden;
   border-right: 1px solid hsl(210 90% 40%);
   transition: padding 180ms ease;
@@ -138,6 +140,8 @@
 
 .workspace {
   min-width: 0;
+  height: 100vh;
+  overflow-y: auto;
   padding: 28px 64px 28px 64px;
   display: flex;
   flex-direction: column;
@@ -313,6 +317,9 @@ h2 {
 }
 
 .table-head {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   background: hsl(207 100% 97%);
   color: hsl(214 20% 45%);
   font-size: 12px;
@@ -434,6 +441,15 @@ h2 {
   place-items: center;
   gap: 8px;
   color: #6c7c89;
+}
+
+.asset-load-more {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  border-top: 1px solid hsl(207 45% 94%);
+  color: #6f7e8e;
+  font-size: 13px;
 }
 
 .database-empty-state {
@@ -665,6 +681,26 @@ h2 {
   box-shadow: 0 24px 70px rgb(13 24 32 / 24%);
 }
 
+.compact-modal {
+  width: max-content;
+  min-width: 280px;
+  max-width: calc(100vw - 36px);
+  justify-self: center;
+}
+
+.compact-modal-asset-name {
+  max-width: 320px;
+  overflow-wrap: anywhere;
+  border: 1px solid hsl(207 60% 90%);
+  border-radius: 8px;
+  background: hsl(207 100% 98%);
+  color: #536575;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .upload-modal {
   width: min(420px, 100%);
   display: grid;
@@ -758,6 +794,7 @@ h2 {
 
   .project-rail {
     position: static;
+    height: auto;
   }
 
   .panel-toggle {

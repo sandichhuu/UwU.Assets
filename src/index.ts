@@ -28,6 +28,7 @@ const assetKinds = new Set<AssetKind>(["Image", "Audio", "Video"]);
 const localizationKinds = new Set<LocalizationKind>(["audioLocalization", "textLocalization"]);
 const assetStoragePathEnvName = "ASSET_STORAGE_PATH";
 const configuredAssetStoragePath = Bun.env[assetStoragePathEnvName]?.trim();
+const defaultAssetPageSize = 50;
 
 if (!configuredAssetStoragePath) {
   throw new Error(`${assetStoragePathEnvName} must be set to a directory path before starting the server.`);
@@ -46,6 +47,15 @@ function assetPreviewFilePath(name: string) {
 
 function isSafeAssetName(name: string) {
   return name === name.replaceAll("\\", "/").split("/").pop();
+}
+
+function assetPageParams(req: Request) {
+  const params = new URL(req.url).searchParams;
+  const parsedLimit = Number(params.get("limit"));
+  const parsedOffset = Number(params.get("offset"));
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(Math.floor(parsedLimit), 100) : defaultAssetPageSize;
+  const offset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? Math.floor(parsedOffset) : 0;
+  return { limit, offset };
 }
 
 async function assetResponse(req: Request, mode: "id" | "name", key: string) {
@@ -122,13 +132,14 @@ const server = serve({
       async GET(req) {
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
+        const page = { limit: defaultAssetPageSize, offset: 0 };
 
         return Response.json({
           project,
           assets: {
-            Image: listAssets(project.id, "Image"),
-            Audio: listAssets(project.id, "Audio"),
-            Video: listAssets(project.id, "Video"),
+            Image: listAssets(project.id, "Image", page),
+            Audio: listAssets(project.id, "Audio", page),
+            Video: listAssets(project.id, "Video", page),
           },
           audioLocalization: listLocalization(project.id, "audioLocalization"),
           textLocalization: listLocalization(project.id, "textLocalization"),
@@ -150,7 +161,7 @@ const server = serve({
           return Response.json({ error: "Invalid asset kind" }, { status: 400 });
         }
 
-        return Response.json({ assets: listAssets(project.id, kind ?? undefined) });
+        return Response.json({ assets: listAssets(project.id, kind ?? undefined, assetPageParams(req)) });
       },
       async POST(req) {
         const project = getProject(req.params.projectId);
