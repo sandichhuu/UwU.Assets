@@ -946,7 +946,8 @@ export function App() {
         {!isAccountPanelOpen && <nav className="tabbar" aria-label="Asset tabs">
           {visibleTabs.map(tab => {
             const Icon = tab === "Image" ? FileImage : tab === "Audio" ? FileAudio : tab === "Video" ? FileVideo : tab === "Audit Logs" ? History : tab === "Settings" ? Settings : Globe2;
-            return <button className={activeTab === tab ? "tab is-active" : "tab"} key={tab} onClick={() => { setIsAccountPanelOpen(false); setActiveTab(tab); }}><Icon />{tab}</button>;
+            const tabClassName = [activeTab === tab ? "tab is-active" : "tab", tab === "Audit Logs" ? "audit-log-tab" : ""].filter(Boolean).join(" ");
+            return <button className={tabClassName} key={tab} onClick={() => { setIsAccountPanelOpen(false); setActiveTab(tab); }}><Icon />{tab}</button>;
           })}
         </nav>}
 
