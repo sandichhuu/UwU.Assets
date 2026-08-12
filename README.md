@@ -1,53 +1,49 @@
-# bun-react-tailwind-shadcn-template
+# UwU Assets
 
-To install dependencies:
+### Why ?
+After few years working on game dev / web dev / backend ... position.
+Sometime projects using the same asset but have to separate because have no tool support.
+For example:
+```
+Example1: Game mobile has game items, the website using icon of items also for trading purpose.
+Example2: A website separate features into multiple projects (because tech-stack / too big / ...).
+And their using the same assets.
+```
+So I need a tool support manage the Image, Video, Audio, Localization without recompile the source code.
+Replace when needs and faster workflow.
 
-```bash
-bun install
+### Features
+- Auto convert image to webp during upload.
+- Auto convert image to smaller or bigger size.
+- Auto convert video to webm.
+- Auto convert audio to ogg.
+- Audio/Text localization.
+- Replace assets faster without rebuild the source code.
+- AI auto translate localization. (Have to write the English first, then other languages auto).
+
+### Deployment
+I'm usually using this tool with docker-compose.
+```yaml
+services:
+  uwu-assets:
+    image: uwu-assets:local
+    container_name: uwu-assets
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SQLITE_DATABASE_PATH: /app/data/database.sqlite
+      ASSET_STORAGE_PATH: /app/data/assets
+    volumes:
+      - uwu-assets-data:/app/data
+    networks:
+      - proxy-net
+networks:
+  proxy-net:
+    external: true
+volumes:
+  uwu-assets-data:
 ```
 
-To start a development server:
-
-```bash
-export SQLITE_DATABASE_PATH=./data/uwu-assets.sqlite
-export ASSET_STORAGE_PATH=./data/assets
-bun dev
-```
-
-To run for production:
-
-```bash
-export SQLITE_DATABASE_PATH="$PWD/data/uwu-assets.sqlite"
-export ASSET_STORAGE_PATH="$PWD/data/assets"
-bun run build
-bun start
-```
-
-To preview only the built static frontend in `dist` after `bun run build`, run:
-
-```bash
-bun run preview
-```
-
-Do not run `bun dist/index.html` directly. The production server entrypoint is `dist/index.js`.
-
-In PowerShell, set the database path with:
-
-```powershell
-$env:SQLITE_DATABASE_PATH = "$PWD/data/uwu-assets.sqlite"
-$env:ASSET_STORAGE_PATH = "$PWD/data/assets"
-```
-
-The server creates the parent directory, SQLite file, and asset storage directory automatically when they do not already exist.
-
-## Docker
-
-The included `docker-compose.yaml` stores SQLite and uploaded assets in a Docker-managed volume:
-
-```bash
-docker compose up --build -d
-```
-
-If you change the compose file back to a host bind mount such as `./data:/app/data`, the host `data` directory and any existing `*.sqlite`, `*.sqlite-wal`, and `*.sqlite-shm` files must be writable by the container's `bun` user. Otherwise SQLite will fail during startup with `SQLITE_CANTOPEN`.
-
-This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+### Preview
+<img width="1919" height="948" alt="image" src="https://github.com/user-attachments/assets/7ce8ed21-18a5-4fae-92f5-ef1f967235b9" />
