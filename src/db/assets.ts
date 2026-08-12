@@ -117,6 +117,18 @@ const listAssetsQuery = db.query(`
   ORDER BY updated_at DESC, name ASC
 `);
 
+const getAssetByIdQuery = db.query(`
+  SELECT id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, created_at, updated_at
+  FROM assets
+  WHERE id = $id
+`);
+
+const getAssetByNameQuery = db.query(`
+  SELECT id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, created_at, updated_at
+  FROM assets
+  WHERE name = $name
+`);
+
 const deleteAssetQuery = db.query(`
   DELETE FROM assets
   WHERE id = $id
@@ -205,6 +217,16 @@ export function createAsset(input: {
 
 export function listAssets(projectId: string, kind?: AssetKind) {
   return (listAssetsQuery.all({ projectId, kind: kind ?? null }) as AssetRow[]).map(mapAsset);
+}
+
+export function getAssetById(id: string) {
+  const row = getAssetByIdQuery.get({ id }) as AssetRow | null;
+  return row ? mapAsset(row) : null;
+}
+
+export function getAssetByName(name: string) {
+  const row = getAssetByNameQuery.get({ name }) as AssetRow | null;
+  return row ? mapAsset(row) : null;
 }
 
 export function deleteAsset(id: string) {

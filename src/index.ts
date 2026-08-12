@@ -1,4 +1,6 @@
 import { serve } from "bun";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { join, resolve } from "node:path";
 import index from "./index.html";
 import {
   createAsset,
@@ -6,6 +8,8 @@ import {
   deleteAsset,
   deleteLocalization,
   deleteProject,
+  getAssetById,
+  getAssetByName,
   getProject,
   getProjectSettings,
   listAssets,
@@ -22,6 +26,52 @@ ensureSeedData();
 
 const assetKinds = new Set<AssetKind>(["Image", "Audio", "Video"]);
 const localizationKinds = new Set<LocalizationKind>(["audioLocalization", "textLocalization"]);
+const assetStoragePathEnvName = "ASSET_STORAGE_PATH";
+const configuredAssetStoragePath = Bun.env[assetStoragePathEnvName]?.trim();
+
+if (!configuredAssetStoragePath) {
+  throw new Error(`${assetStoragePathEnvName} must be set to a directory path before starting the server.`);
+}
+
+const assetStoragePath = resolve(configuredAssetStoragePath);
+mkdirSync(assetStoragePath, { recursive: true });
+
+function assetFilePath(name: string) {
+  return join(assetStoragePath, name);
+}
+
+function assetPreviewFilePath(name: string) {
+  return join(assetStoragePath, `${name}.preview.webp`);
+}
+
+function isSafeAssetName(name: string) {
+  return name === name.replaceAll("\\", "/").split("/").pop();
+}
+
+async function assetResponse(req: Request, mode: "id" | "name", key: string) {
+  const asset = mode === "id" ? getAssetById(key) : getAssetByName(key);
+  if (!asset) return Response.json({ error: "Asset not found" }, { status: 404 });
+
+  const token = new URL(req.url).searchParams.get("token");
+  const settings = getProjectSettings(asset.projectId);
+  if (!token || token !== settings.assetToken) {
+    return Response.json({ error: "Invalid asset token" }, { status: 401 });
+  }
+
+  const shouldServePreview = new URL(req.url).searchParams.get("preview") === "1";
+  const file = Bun.file(shouldServePreview ? assetPreviewFilePath(asset.name) : assetFilePath(asset.name));
+  if (!(await file.exists())) {
+    return Response.json({ error: "Asset file not found" }, { status: 404 });
+  }
+
+  return new Response(file, {
+    headers: {
+      "Content-Type": shouldServePreview ? "image/webp" : asset.mimeType || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${(shouldServePreview ? `${asset.name}.preview.webp` : asset.name).replaceAll('"', "")}"`,
+      "Cache-Control": "public, max-age=31536000, immutable",
+    },
+  });
+}
 
 const server = serve({
   routes: {
@@ -112,17 +162,28 @@ const server = serve({
           kind?: AssetKind;
           sizeBytes?: number;
           mimeType?: string;
+          contentBase64?: string;
+          previewContentBase64?: string;
           metadata?: string[];
         };
 
-        if (!body.originalName?.trim() || !body.name?.trim() || !body.kind || !assetKinds.has(body.kind)) {
-          return Response.json({ error: "originalName, name, and valid kind are required" }, { status: 400 });
+        const assetName = body.name?.trim();
+        if (!body.originalName?.trim() || !assetName || !body.kind || !assetKinds.has(body.kind) || !body.contentBase64) {
+          return Response.json({ error: "originalName, name, contentBase64, and valid kind are required" }, { status: 400 });
+        }
+        if (!isSafeAssetName(assetName)) {
+          return Response.json({ error: "Asset name cannot contain path separators" }, { status: 400 });
         }
 
+        mkdirSync(assetStoragePath, { recursive: true });
+        await Bun.write(assetFilePath(assetName), Buffer.from(body.contentBase64, "base64"));
+        if (body.previewContentBase64) {
+          await Bun.write(assetPreviewFilePath(assetName), Buffer.from(body.previewContentBase64, "base64"));
+        }
         const asset = createAsset({
           projectId: project.id,
           originalName: body.originalName.trim(),
-          name: body.name.trim(),
+          name: assetName,
           kind: body.kind,
           sizeBytes: body.sizeBytes,
           mimeType: body.mimeType,
@@ -135,7 +196,27 @@ const server = serve({
 
     "/api/assets/:assetId": {
       async DELETE(req) {
-        return Response.json({ deleted: deleteAsset(req.params.assetId) });
+        const asset = getAssetById(req.params.assetId);
+        const deleted = deleteAsset(req.params.assetId);
+        if (deleted && asset) {
+          const path = assetFilePath(asset.name);
+          if (existsSync(path)) unlinkSync(path);
+          const previewPath = assetPreviewFilePath(asset.name);
+          if (existsSync(previewPath)) unlinkSync(previewPath);
+        }
+        return Response.json({ deleted });
+      },
+    },
+
+    "/assets/id/:assetId": {
+      async GET(req) {
+        return assetResponse(req, "id", req.params.assetId);
+      },
+    },
+
+    "/assets/name/:assetName": {
+      async GET(req) {
+        return assetResponse(req, "name", req.params.assetName);
       },
     },
 

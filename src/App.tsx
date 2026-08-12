@@ -52,11 +52,25 @@ type Project = {
   textLocalization: LocalizationRow[];
 };
 
+type UploadProgress = {
+  title: string;
+  detail: string;
+  percent: number;
+};
+
+type PreviewAsset = {
+  asset: Asset;
+  previewUrl: string;
+  originalUrl: string;
+};
+
 const tabs: Tab[] = ["Image", "Audio", "Video", "Audio Localization", "Text Localization", "Settings"];
 const languages = ["en", "vi", "ja", "ko", "th", "zh"];
 const primaryLanguage = "en";
 const secondaryLanguages = languages.filter(language => language !== primaryLanguage);
 const emptyAssets = (): Record<AssetKind, Asset[]> => ({ Image: [], Audio: [], Video: [] });
+const supportedImageExtensions = new Set(["png", "svg", "jpg", "jpeg", "webp"]);
+const imageUploadAccept = ".png,.svg,.jpg,.jpeg,.webp,image/png,image/svg+xml,image/jpeg,image/webp";
 
 function emptyProject(id: string, name: string): Project {
   return { id, name, assets: emptyAssets(), audioLocalization: [], textLocalization: [] };
@@ -104,9 +118,69 @@ function mapProjectPayload(data: any): Project {
 
 function uploadName(fileName: string, kind: AssetKind) {
   const extension = kind === "Image" ? "webp" : kind === "Video" ? "webm" : "ogg";
-  const base = fileName.replace(/\.[^/.]+$/, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
-  const hash = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
-  return `${base}.${hash}.${extension}`;
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const hash = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${hash}.${extension}`;
+}
+
+function imageExtension(fileName: string) {
+  return fileName.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function isSupportedImageFile(file: File) {
+  return supportedImageExtensions.has(imageExtension(file.name));
+}
+
+function readAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result)));
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read image file")));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function fileToBase64(file: File) {
+  return (await readAsDataUrl(file)).split(",", 2)[1] ?? "";
+}
+
+function loadImage(source: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.addEventListener("load", () => resolve(image));
+    image.addEventListener("error", () => reject(new Error("Could not decode image file")));
+    image.src = source;
+  });
+}
+
+function wait(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function normalizeImageToWebp(file: File) {
+  return imageFileToWebp(file);
+}
+
+async function imageFileToWebp(file: File, maxSize?: number) {
+  const image = await loadImage(await readAsDataUrl(file));
+  const canvas = document.createElement("canvas");
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const scale = maxSize ? Math.min(1, maxSize / Math.max(sourceWidth, sourceHeight)) : 1;
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context || !canvas.width || !canvas.height) throw new Error(`Could not normalize ${file.name}`);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/webp", 0.92));
+  if (!blob) throw new Error(`Could not convert ${file.name} to WebP`);
+  return new File([blob], uploadName(file.name, "Image"), { type: "image/webp", lastModified: Date.now() });
+}
+
+async function generateImagePreview(file: File, normalizedName: string) {
+  const preview = await imageFileToWebp(file, 256);
+  return new File([preview], `${normalizedName}.preview.webp`, { type: "image/webp", lastModified: Date.now() });
 }
 
 export function App() {
@@ -121,6 +195,9 @@ export function App() {
   const [isDeleteProjectDialogOpen, setIsDeleteProjectDialogOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [deleteProjectName, setDeleteProjectName] = useState("");
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<PreviewAsset | null>(null);
+  const [deleteAssetTarget, setDeleteAssetTarget] = useState<Asset | null>(null);
 
   const activeProject = projects.find(project => project.id === activeProjectId) ?? projects[0];
   const activeLocalizationKind: LocalizationKind | null =
@@ -173,12 +250,8 @@ export function App() {
 
   const assetUrl = (asset: Asset, mode: "id" | "name") => {
     const key = mode === "id" ? asset.id : asset.name;
-    const params = new URLSearchParams({ token });
-    if (asset.kind === "Image") {
-      params.set("width", "{width}");
-      params.set("height", "{height}");
-    }
-    return `/assets/${mode}/${key}?${params.toString()}`;
+    const path = `/assets/${mode}/${encodeURIComponent(key)}`;
+    return `${location.origin}${path}?token=${encodeURIComponent(token)}`;
   };
 
   const copyToClipboard = async (value: string, label: string) => {
@@ -213,27 +286,64 @@ export function App() {
   const addUploadedFiles = async (files: FileList | null, uploadKind?: AssetKind) => {
     const kind = uploadKind ?? (isAssetTab(activeTab) ? activeTab : null);
     if (!files?.length || !activeProject || !kind) return;
-    await Promise.all(
-      Array.from(files).map(file =>
-        fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/assets`, {
+    const selectedFiles = Array.from(files);
+    const unsupportedImages = kind === "Image" ? selectedFiles.filter(file => !isSupportedImageFile(file)) : [];
+    if (unsupportedImages.length) {
+      setToast(`Image assets must be .png, .svg, .jpg, or .webp: ${unsupportedImages.map(file => file.name).join(", ")}`);
+      return;
+    }
+    const startedAt = performance.now();
+    let savedCount = 0;
+    const totalSteps = selectedFiles.length * (kind === "Image" ? 2 : 1) + 1;
+    let completedSteps = 0;
+    const showProgress = (title: string, detail: string) => {
+      setUploadProgress({ title, detail, percent: Math.min(98, Math.round((completedSteps / totalSteps) * 100)) });
+    };
+
+    setUploadProgress({ title: "Preparing upload", detail: `${selectedFiles.length} ${kind.toLowerCase()} asset(s) selected`, percent: 4 });
+
+    try {
+      for (const originalFile of selectedFiles) {
+        showProgress(kind === "Image" ? "Normalizing image" : "Preparing asset", originalFile.name);
+        const normalizedFile = kind === "Image" ? await normalizeImageToWebp(originalFile) : originalFile;
+        const previewFile = kind === "Image" ? await generateImagePreview(originalFile, normalizedFile.name) : null;
+        completedSteps += 1;
+
+        showProgress("Uploading asset", kind === "Image" ? `${normalizedFile.name} as WebP` : originalFile.name);
+        const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/assets`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            originalName: file.name,
-            name: uploadName(file.name, kind),
+            originalName: originalFile.name,
+            name: kind === "Image" ? normalizedFile.name : uploadName(originalFile.name, kind),
             kind,
-            sizeBytes: file.size,
-            mimeType: file.type,
+            sizeBytes: normalizedFile.size,
+            mimeType: normalizedFile.type,
+            contentBase64: await fileToBase64(normalizedFile),
+            previewContentBase64: previewFile ? await fileToBase64(previewFile) : undefined,
             metadata: [
               kind === "Image" ? "converted to webp" : kind === "Video" ? "converted to webm" : "converted to ogg",
-              file.type || "unknown mime",
+              originalFile.type || "unknown mime",
             ],
           }),
-        }),
-      ),
-    );
-    await loadProject(activeProject.id);
-    setToast(`Saved ${files.length} ${kind.toLowerCase()} asset(s) to database`);
+        });
+        if (!response.ok) throw new Error(`Could not upload ${originalFile.name}`);
+        savedCount += 1;
+        completedSteps += 1;
+      }
+
+      showProgress("Refreshing assets", "Loading saved database rows");
+      await loadProject(activeProject.id);
+      completedSteps = totalSteps;
+      setUploadProgress({ title: "Upload complete", detail: `Saved ${savedCount} ${kind.toLowerCase()} asset(s)`, percent: 100 });
+      setToast(`Saved ${savedCount} ${kind.toLowerCase()} asset(s) to database`);
+    } catch (error) {
+      setUploadProgress({ title: "Upload failed", detail: error instanceof Error ? error.message : String(error), percent: 100 });
+      setToast(error instanceof Error ? error.message : String(error));
+    } finally {
+      await wait(Math.max(0, 1000 - (performance.now() - startedAt)));
+      setUploadProgress(null);
+    }
   };
 
   const removeAsset = async (asset: Asset) => {
@@ -435,7 +545,7 @@ export function App() {
         ) : activeLocalizationKind ? (
           <LocalizationTable kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onUpdate={updateLocalization} onTranslate={aiTranslate} />
         ) : (
-          <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onUpload={addUploadedFiles} onRemove={removeAsset} />
+          <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={asset => `${assetUrl(asset, "name")}&preview=1`} onPreview={asset => setPreviewAsset({ asset, previewUrl: `${assetUrl(asset, "name")}&preview=1`, originalUrl: assetUrl(asset, "name") })} />
         )}
         <div className="status-bar"><span>{toast}</span><span>All visible projects, assets, localization rows, and settings are loaded from SQLite.</span></div>
       </section>
@@ -459,21 +569,89 @@ export function App() {
           </form>
         </div>
       )}
+
+      {uploadProgress && <UploadProgressModal progress={uploadProgress} />}
+      {previewAsset && <ImagePreviewModal preview={previewAsset} onClose={() => setPreviewAsset(null)} />}
+      {deleteAssetTarget && (
+        <ConfirmAssetDeleteModal
+          asset={deleteAssetTarget}
+          onCancel={() => setDeleteAssetTarget(null)}
+          onConfirm={() => {
+            const asset = deleteAssetTarget;
+            setDeleteAssetTarget(null);
+            void removeAsset(asset);
+          }}
+        />
+      )}
     </main>
   );
 }
 
-function AssetTable({ assets, assetKind, onCopy, onDownload, onUpload, onRemove }: { assets: Asset[]; assetKind: AssetKind; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void }) {
+function UploadProgressModal({ progress }: { progress: UploadProgress }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="upload-modal" role="status" aria-live="polite" aria-label="Upload progress">
+        <div>
+          <h2>{progress.title}</h2>
+          <p>{progress.detail}</p>
+        </div>
+        <div className="upload-progress-track" aria-hidden="true">
+          <div className="upload-progress-bar" style={{ width: `${progress.percent}%` }} />
+        </div>
+        <span>{progress.percent}%</span>
+      </div>
+    </div>
+  );
+}
+
+function ImagePreviewModal({ preview, onClose }: { preview: PreviewAsset; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="image-preview-modal" role="dialog" aria-modal="true" aria-label={preview.asset.name} onClick={event => event.stopPropagation()}>
+        <div className="image-preview-modal-header">
+          <div><h2>{preview.asset.name}</h2><p>{preview.asset.originalName}</p></div>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </div>
+        <img src={preview.originalUrl} alt={preview.asset.originalName} />
+      </div>
+    </div>
+  );
+}
+
+function ConfirmAssetDeleteModal({ asset, onCancel, onConfirm }: { asset: Asset; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="project-modal danger-modal" role="dialog" aria-modal="true" aria-label={`Delete ${asset.name}`}>
+        <div>
+          <div className="modal-title-row"><TriangleAlert /><h2>Delete asset</h2></div>
+          <p>Remove <strong>{asset.name}</strong> from this project?</p>
+        </div>
+        <div className="modal-actions">
+          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button type="button" variant="destructive" onClick={onConfirm}>Delete asset</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssetTable({ assets, assetKind, onCopy, onDownload, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isImageTable = assetKind === "Image";
   return (
     <Card className="table-shell">
-      <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div><div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? "image/*" : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div></div>
+      <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div><div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div></div>
       <div className="data-table">
-        <div className="asset-row table-head"><span>No.</span><span>Name</span><span>Metadata</span><span>Tools</span></div>
+        <div className={isImageTable ? "asset-row image-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span>{isImageTable && <span>Preview</span>}<span>Metadata</span><span>Tools</span></div>
         {assets.map((asset, index) => (
-          <div className="asset-row" key={asset.id}>
+          <div className={isImageTable ? "asset-row image-asset-row" : "asset-row"} key={asset.id}>
             <span className="row-no">{assets.length - index}</span>
             <div><strong>{asset.name}</strong><small>{asset.originalName}</small></div>
+            {isImageTable && (
+              <button className="image-preview" type="button" onClick={() => onPreview(asset)} title={`Preview ${asset.name}`}>
+                <img src={previewUrl(asset)} alt={asset.originalName} loading="lazy" />
+              </button>
+            )}
             <div className="metadata-list">{asset.metadata.map(item => <span key={item}>{item}</span>)}<span>{formatBytes(asset.sizeBytes)}</span><span>{asset.updatedAt.slice(0, 10)}</span></div>
             <div className="toolset">
               <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "id")} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
