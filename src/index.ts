@@ -1,5 +1,6 @@
 import { serve } from "bun";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import index from "./index.html";
 import {
@@ -45,8 +46,53 @@ function assetPreviewFilePath(name: string) {
   return join(assetStoragePath, `${name}.preview.webp`);
 }
 
+function oggAssetName(name: string) {
+  return name.replace(/\.[^.]*$/, "") + ".ogg";
+}
+
+function webmAssetName(name: string) {
+  return name.replace(/\.[^.]*$/, "") + ".webm";
+}
+
 function isSafeAssetName(name: string) {
   return name === name.replaceAll("\\", "/").split("/").pop();
+}
+
+async function convertWithFfmpeg(content: Buffer, sourceName: string, outputExtension: string, args: string[], errorMessage: string) {
+  const conversionId = crypto.randomUUID();
+  const tempPath = join(tmpdir(), `uwu-asset-${conversionId}-${sourceName.replaceAll(/[^\w.-]/g, "_")}`);
+  const outputPath = join(tmpdir(), `uwu-asset-${conversionId}.${outputExtension}`);
+
+  try {
+    await Bun.write(tempPath, content);
+    const process = Bun.spawn(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", tempPath, ...args, outputPath], {
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([process.exited, new Response(process.stderr).text()]);
+    if (exitCode !== 0) {
+      throw new Error(stderr.trim() || errorMessage);
+    }
+
+    return Buffer.from(await Bun.file(outputPath).arrayBuffer());
+  } finally {
+    for (const path of [tempPath, outputPath]) {
+      if (existsSync(path)) rmSync(path, { force: true });
+    }
+  }
+}
+
+async function convertAudioToOgg(content: Buffer, sourceName: string) {
+  return convertWithFfmpeg(content, sourceName, "ogg", ["-vn", "-c:a", "libopus"], "ffmpeg could not convert audio to Ogg");
+}
+
+async function convertVideoToWebm(content: Buffer, sourceName: string) {
+  return convertWithFfmpeg(
+    content,
+    sourceName,
+    "webm",
+    ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-c:a", "libopus"],
+    "ffmpeg could not convert video to WebM",
+  );
 }
 
 function assetPageParams(req: Request) {
@@ -84,6 +130,7 @@ async function assetResponse(req: Request, mode: "id" | "name", key: string) {
 }
 
 const server = serve({
+  port: Bun.env.PORT ? Number(Bun.env.PORT) : undefined,
   routes: {
     // Serve index.html for all unmatched routes.
     "/*": index,
@@ -178,7 +225,13 @@ const server = serve({
           metadata?: string[];
         };
 
-        const assetName = body.name?.trim();
+        const requestedAssetName = body.name?.trim();
+        const assetName =
+          body.kind === "Audio" && requestedAssetName
+            ? oggAssetName(requestedAssetName)
+            : body.kind === "Video" && requestedAssetName
+              ? webmAssetName(requestedAssetName)
+              : requestedAssetName;
         if (!body.originalName?.trim() || !assetName || !body.kind || !assetKinds.has(body.kind) || !body.contentBase64) {
           return Response.json({ error: "originalName, name, contentBase64, and valid kind are required" }, { status: 400 });
         }
@@ -187,7 +240,15 @@ const server = serve({
         }
 
         mkdirSync(assetStoragePath, { recursive: true });
-        await Bun.write(assetFilePath(assetName), Buffer.from(body.contentBase64, "base64"));
+        const originalContent = Buffer.from(body.contentBase64, "base64");
+        const assetContent =
+          body.kind === "Audio"
+            ? await convertAudioToOgg(originalContent, body.originalName.trim())
+            : body.kind === "Video"
+              ? await convertVideoToWebm(originalContent, body.originalName.trim())
+              : originalContent;
+        const mimeType = body.kind === "Audio" ? "audio/ogg" : body.kind === "Video" ? "video/webm" : body.mimeType;
+        await Bun.write(assetFilePath(assetName), assetContent);
         if (body.previewContentBase64) {
           await Bun.write(assetPreviewFilePath(assetName), Buffer.from(body.previewContentBase64, "base64"));
         }
@@ -196,8 +257,8 @@ const server = serve({
           originalName: body.originalName.trim(),
           name: assetName,
           kind: body.kind,
-          sizeBytes: body.sizeBytes,
-          mimeType: body.mimeType,
+          sizeBytes: assetContent.byteLength,
+          mimeType,
           metadata: body.metadata,
         });
 

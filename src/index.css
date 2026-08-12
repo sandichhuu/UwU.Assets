@@ -75,7 +75,6 @@
 
 .brand-block span,
 .project-item small,
-.status-bar,
 .table-toolbar p,
 .asset-row small {
   color: #6f7e8e;
@@ -158,7 +157,6 @@
 
 .topbar,
 .table-toolbar,
-.status-bar,
 .bottom-actions {
   display: flex;
   align-items: center;
@@ -260,6 +258,10 @@ h2 {
   padding: 12px 14px;
   cursor: pointer;
   font-weight: 700;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
 }
 
 .tab:hover {
@@ -276,6 +278,23 @@ h2 {
 .tab.is-active {
   color: hsl(207 100% 43%);
   border-color: hsl(207 100% 48%);
+}
+
+.tab-panel {
+  animation: tab-panel-enter 220ms ease-out;
+  will-change: opacity, transform;
+}
+
+@keyframes tab-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .table-shell {
@@ -413,6 +432,24 @@ h2 {
 .asset-row strong,
 .asset-row small {
   display: block;
+}
+
+.asset-name-cell {
+  min-width: 0;
+}
+
+.audio-name-cell {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.asset-name-cell strong,
+.asset-name-cell small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metadata-list {
@@ -644,16 +681,10 @@ h2 {
   justify-content: flex-end;
 }
 
-.bottom-actions span,
-.status-bar span {
+.bottom-actions span {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-
-.status-bar {
-  color: hsl(214 20% 44%);
-  font-size: 13px;
 }
 
 .hidden {
@@ -818,7 +849,6 @@ h2 {
 
   .topbar,
   .table-toolbar,
-  .status-bar,
   .setting-row {
     align-items: stretch;
     flex-direction: column;
@@ -863,5 +893,13 @@ h2 {
   .image-preview {
     width: 56px;
     height: 42px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab,
+  .tab-panel {
+    animation: none;
+    transition: none;
   }
 }

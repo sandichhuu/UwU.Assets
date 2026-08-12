@@ -10,6 +10,8 @@ import {
   Link2,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
+  Play,
   Plus,
   Settings,
   Trash2,
@@ -21,6 +23,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Toaster } from "@/components/ui/sonner";
+import { toast as showToast } from "sonner";
 import "./index.css";
 
 type AssetKind = "Image" | "Audio" | "Video";
@@ -65,6 +69,8 @@ type PreviewAsset = {
 };
 
 const assetPageSize = 50;
+const selectedProjectStorageKey = "uwu-assets:selectedProjectId";
+const selectedTabStorageKey = "uwu-assets:selectedTab";
 const tabs: Tab[] = ["Image", "Audio", "Video", "Audio Localization", "Text Localization", "Settings"];
 const languages = ["en", "vi", "ja", "ko", "th", "zh"];
 const primaryLanguage = "en";
@@ -84,6 +90,10 @@ function formatBytes(bytes: number) {
 
 function isAssetTab(tab: Tab): tab is AssetKind {
   return tab === "Image" || tab === "Audio" || tab === "Video";
+}
+
+function isTab(value: string | null): value is Tab {
+  return tabs.includes(value as Tab);
 }
 
 function mapAssetPayload(asset: any): Asset {
@@ -188,11 +198,13 @@ async function generateImagePreview(file: File, normalizedName: string) {
 
 export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState("");
-  const [activeTab, setActiveTab] = useState<Tab>("Image");
+  const [activeProjectId, setActiveProjectId] = useState(() => localStorage.getItem(selectedProjectStorageKey) ?? "");
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const savedTab = localStorage.getItem(selectedTabStorageKey);
+    return isTab(savedTab) ? savedTab : "Image";
+  });
   const [token, setToken] = useState("");
   const [gptApiToken, setGptApiToken] = useState("");
-  const [toast, setToast] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
   const [isDeleteProjectDialogOpen, setIsDeleteProjectDialogOpen] = useState(false);
@@ -240,22 +252,32 @@ export function App() {
     if (!response.ok) throw new Error("Could not load projects from database");
     const data = (await response.json()) as { projects: Array<{ id: string; name: string }> };
     const shells = data.projects.map(project => emptyProject(project.id, project.name));
+    const savedProjectId = localStorage.getItem(selectedProjectStorageKey);
+    const selectedProject = shells.find(project => project.id === savedProjectId) ?? shells[0];
     setProjects(shells);
-    if (shells[0]) {
-      setActiveProjectId(shells[0].id);
-      await loadProject(shells[0].id);
-      setToast("");
+    if (selectedProject) {
+      setActiveProjectId(selectedProject.id);
+      await loadProject(selectedProject.id);
     } else {
       setActiveProjectId("");
     }
   };
 
   useEffect(() => {
-    loadProjects().catch(error => setToast(String(error)));
+    loadProjects().catch(error => showToast.error(String(error)));
   }, []);
 
   useEffect(() => {
-    if (activeProjectId) loadProject(activeProjectId).catch(error => setToast(String(error)));
+    if (activeProjectId) localStorage.setItem(selectedProjectStorageKey, activeProjectId);
+    else localStorage.removeItem(selectedProjectStorageKey);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    localStorage.setItem(selectedTabStorageKey, activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeProjectId) loadProject(activeProjectId).catch(error => showToast.error(String(error)));
   }, [activeProjectId]);
 
   const loadMoreAssets = async (kind: AssetKind) => {
@@ -276,7 +298,7 @@ export function App() {
       );
       setAssetHasMore(current => ({ ...current, [kind]: nextAssets.length === assetPageSize }));
     } catch (error) {
-      setToast(error instanceof Error ? error.message : String(error));
+      showToast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setIsLoadingMoreAssets(false);
     }
@@ -290,12 +312,12 @@ export function App() {
 
   const copyToClipboard = async (value: string, label: string) => {
     await navigator.clipboard?.writeText(value);
-    setToast(label);
+    showToast.success(label);
   };
 
   const addProject = async () => {
     const name = newProjectName.trim();
-    if (!name) return setToast("Project name is required");
+    if (!name) return showToast.warning("Project name is required");
     const response = await fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     const data = await response.json();
     const project = emptyProject(data.project.id, data.project.name);
@@ -303,18 +325,18 @@ export function App() {
     setActiveProjectId(project.id);
     setActiveTab("Image");
     setIsProjectDialogOpen(false);
-    setToast(`Created ${project.name} in database`);
+    showToast.success(`Created ${project.name} in database`);
   };
 
   const deleteActiveProject = async () => {
     if (!activeProject) return;
-    if (deleteProjectName !== activeProject.name) return setToast("Project name does not match");
+    if (deleteProjectName !== activeProject.name) return showToast.warning("Project name does not match");
     await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}`, { method: "DELETE" });
     const remaining = projects.filter(project => project.id !== activeProject.id);
     setProjects(remaining);
     setActiveProjectId(remaining[0]?.id ?? "");
     setIsDeleteProjectDialogOpen(false);
-    setToast(remaining.length ? `Deleted ${activeProject.name} from database` : "No projects found in SQLite database");
+    showToast.success(remaining.length ? `Deleted ${activeProject.name} from database` : "No projects found in SQLite database");
   };
 
   const addUploadedFiles = async (files: FileList | null, uploadKind?: AssetKind) => {
@@ -323,7 +345,7 @@ export function App() {
     const selectedFiles = Array.from(files);
     const unsupportedImages = kind === "Image" ? selectedFiles.filter(file => !isSupportedImageFile(file)) : [];
     if (unsupportedImages.length) {
-      setToast(`Image assets must be .png, .svg, .jpg, or .webp: ${unsupportedImages.map(file => file.name).join(", ")}`);
+      showToast.warning(`Image assets must be .png, .svg, .jpg, or .webp: ${unsupportedImages.map(file => file.name).join(", ")}`);
       return;
     }
     const startedAt = performance.now();
@@ -370,10 +392,10 @@ export function App() {
       await loadProject(activeProject.id);
       completedSteps = totalSteps;
       setUploadProgress({ title: "Upload complete", detail: `Saved ${savedCount} ${kind.toLowerCase()} asset(s)`, percent: 100 });
-      setToast(`Saved ${savedCount} ${kind.toLowerCase()} asset(s) to database`);
+      showToast.success(`Saved ${savedCount} ${kind.toLowerCase()} asset(s) to database`);
     } catch (error) {
       setUploadProgress({ title: "Upload failed", detail: error instanceof Error ? error.message : String(error), percent: 100 });
-      setToast(error instanceof Error ? error.message : String(error));
+      showToast.error(error instanceof Error ? error.message : String(error));
     } finally {
       await wait(Math.max(0, 1000 - (performance.now() - startedAt)));
       setUploadProgress(null);
@@ -384,7 +406,7 @@ export function App() {
     if (!activeProject) return;
     await fetch(`/api/assets/${encodeURIComponent(asset.id)}`, { method: "DELETE" });
     await loadProject(activeProject.id);
-    setToast(`Removed ${asset.name} from database`);
+    showToast.success(`Removed ${asset.name} from database`);
   };
 
   const saveLocalization = async (kind: LocalizationKind, row: LocalizationRow) => {
@@ -409,6 +431,42 @@ export function App() {
     void saveLocalization(kind, row);
   };
 
+  const replaceLocalizationAudio = async (rowIndex: number, language: string, file: File) => {
+    if (!activeProject) return;
+    const currentRow = activeProject.audioLocalization[rowIndex];
+    if (!currentRow) return;
+
+    try {
+      setUploadProgress({ title: "Replacing audio", detail: file.name, percent: 35 });
+      const assetName = uploadName(file.name, "Audio");
+      const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/assets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          originalName: file.name,
+          name: assetName,
+          kind: "Audio",
+          sizeBytes: file.size,
+          mimeType: file.type,
+          contentBase64: await fileToBase64(file),
+          metadata: ["converted to ogg", file.type || "unknown mime", `replaced ${currentRow.key}.${language}`],
+        }),
+      });
+      if (!response.ok) throw new Error(`Could not upload ${file.name}`);
+
+      const data = (await response.json()) as { asset: Asset };
+      const row = { ...currentRow, values: { ...currentRow.values, [language]: data.asset.name } };
+      setUploadProgress({ title: "Saving localization", detail: `${currentRow.key} ${language.toUpperCase()}`, percent: 80 });
+      await saveLocalization("audioLocalization", row);
+      await loadProject(activeProject.id);
+      showToast.success(`Replaced ${language.toUpperCase()} audio for ${currentRow.key}`);
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUploadProgress(null);
+    }
+  };
+
   const updateLocalizationKey = (kind: LocalizationKind, rowIndex: number, key: string) => {
     if (!activeProject) return;
     const currentRow = activeProject[kind][rowIndex];
@@ -428,7 +486,7 @@ export function App() {
     if (!row?.id) return;
     await fetch(`/api/localization/${encodeURIComponent(row.id)}`, { method: "DELETE" });
     await loadProject(activeProject.id);
-    setToast("Removed localization row from database");
+    showToast.success("Removed localization row from database");
   };
 
   const addLocalizationRecord = async (kind: LocalizationKind) => {
@@ -450,7 +508,7 @@ export function App() {
       values: Object.fromEntries(languages.map(language => [language, defaultValue])),
     });
     await loadProject(activeProject.id);
-    setToast("Added localization record to database");
+    showToast.success("Added localization record to database");
   };
 
   const aiTranslate = async (kind: LocalizationKind) => {
@@ -465,7 +523,7 @@ export function App() {
     });
     await Promise.all(rows.map(row => saveLocalization(kind, row)));
     await loadProject(activeProject.id);
-    setToast("Saved AI translations to database");
+    showToast.success("Saved AI translations to database");
   };
 
   const saveSettings = async (nextToken: string, nextGptApiToken: string) => {
@@ -481,7 +539,7 @@ export function App() {
     const nextToken = `asset_tok_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
     setToken(nextToken);
     void saveSettings(nextToken, gptApiToken);
-    setToast("Generated and saved a new asset token");
+    showToast.success("Generated and saved a new asset token");
   };
 
   const updateGptApiToken = (value: string) => {
@@ -516,7 +574,7 @@ export function App() {
               <FolderPlus /> Create project
             </Button>
           </Card>
-          <div className="status-bar"><span>{toast}</span></div>
+          <Toaster position="top-right" richColors closeButton />
         </section>
 
         {isProjectDialogOpen && (
@@ -574,14 +632,15 @@ export function App() {
           })}
         </nav>
 
-        {activeTab === "Settings" ? (
-          <SettingPanel assetToken={token} gptApiToken={gptApiToken} projectName={activeProject.name} onCopy={copyToClipboard} onDeleteProject={() => { setDeleteProjectName(""); setIsDeleteProjectDialogOpen(true); }} onGenerateToken={generateToken} onGptApiTokenChange={updateGptApiToken} />
-        ) : activeLocalizationKind ? (
-          <LocalizationTable kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onUpdate={updateLocalization} onTranslate={aiTranslate} />
-        ) : (
-          <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={asset => `${assetUrl(asset, "name")}&preview=1`} onPreview={asset => setPreviewAsset({ asset, previewUrl: `${assetUrl(asset, "name")}&preview=1`, originalUrl: assetUrl(asset, "name") })} />
-        )}
-        <div className="status-bar"><span>{toast}</span><span>All visible projects, assets, localization rows, and settings are loaded from SQLite.</span></div>
+        <div className="tab-panel" key={activeTab}>
+          {activeTab === "Settings" ? (
+            <SettingPanel assetToken={token} gptApiToken={gptApiToken} projectName={activeProject.name} onCopy={copyToClipboard} onDeleteProject={() => { setDeleteProjectName(""); setIsDeleteProjectDialogOpen(true); }} onGenerateToken={generateToken} onGptApiTokenChange={updateGptApiToken} />
+          ) : activeLocalizationKind ? (
+            <LocalizationTable kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
+          ) : (
+            <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={asset => `${assetUrl(asset, "name")}&preview=1`} onPreview={asset => setPreviewAsset({ asset, previewUrl: `${assetUrl(asset, "name")}&preview=1`, originalUrl: assetUrl(asset, "name") })} />
+          )}
+        </div>
       </section>
 
       {isProjectDialogOpen && (
@@ -617,6 +676,7 @@ export function App() {
           }}
         />
       )}
+      <Toaster position="top-right" richColors closeButton />
     </main>
   );
 }
@@ -670,10 +730,13 @@ function ConfirmAssetDeleteModal({ asset, onCancel, onConfirm }: { asset: Asset;
   );
 }
 
-function AssetTable({ assets, assetKind, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
+function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; audioUrl: (asset: Asset) => string; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playingAssetId, setPlayingAssetId] = useState<string | null>(null);
   const isImageTable = assetKind === "Image";
+  const isAudioTable = assetKind === "Audio";
 
   useEffect(() => {
     const element = loadMoreRef.current;
@@ -685,15 +748,49 @@ function AssetTable({ assets, assetKind, hasMore, isLoadingMore, onCopy, onDownl
     return () => observer.disconnect();
   }, [assetKind, hasMore, isLoadingMore, onLoadMore]);
 
+  useEffect(() => {
+    audioRef.current?.pause();
+    setPlayingAssetId(null);
+  }, [assetKind]);
+
+  const toggleAudio = async (asset: Asset) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (playingAssetId === asset.id && !audio.paused) {
+      audio.pause();
+      setPlayingAssetId(null);
+      return;
+    }
+
+    audio.pause();
+    audio.currentTime = 0;
+    audio.src = audioUrl(asset);
+    setPlayingAssetId(asset.id);
+    try {
+      await audio.play();
+    } catch {
+      setPlayingAssetId(null);
+    }
+  };
+
   return (
     <Card className="table-shell">
       <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div><div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div></div>
       <div className="data-table">
+        {isAudioTable && <audio ref={audioRef} className="hidden" onEnded={() => setPlayingAssetId(null)} />}
         <div className={isImageTable ? "asset-row image-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span>{isImageTable && <span>Preview</span>}<span>Metadata</span><span>Tools</span></div>
         {assets.map((asset, index) => (
           <div className={isImageTable ? "asset-row image-asset-row" : "asset-row"} key={asset.id}>
             <span className="row-no">{assets.length - index}</span>
-            <div><strong>{asset.name}</strong><small>{asset.originalName}</small></div>
+            <div className={isAudioTable ? "asset-name-cell audio-name-cell" : "asset-name-cell"}>
+              {isAudioTable && (
+                <Button variant="outline" size="icon-sm" onClick={() => void toggleAudio(asset)} title={playingAssetId === asset.id ? "Pause audio" : "Play audio"} aria-label={playingAssetId === asset.id ? `Pause ${asset.name}` : `Play ${asset.name}`}>
+                  {playingAssetId === asset.id ? <Pause /> : <Play />}
+                </Button>
+              )}
+              <div><strong>{asset.name}</strong><small>{asset.originalName}</small></div>
+            </div>
             {isImageTable && (
               <button className="image-preview" type="button" onClick={() => onPreview(asset)} title={`Preview ${asset.name}`}>
                 <img src={previewUrl(asset)} alt={asset.originalName} loading="lazy" />
@@ -719,9 +816,80 @@ function AssetTable({ assets, assetKind, hasMore, isLoadingMore, onCopy, onDownl
   );
 }
 
-function LocalizationTable({ kind, rows, title, token, onAddRecord, onCopy, onKeyUpdate, onRemove, onUpdate, onTranslate }: { kind: LocalizationKind; rows: LocalizationRow[]; title: string; token: string; onAddRecord: (kind: LocalizationKind) => void; onCopy: (value: string, label: string) => void; onKeyUpdate: (kind: LocalizationKind, rowIndex: number, key: string) => void; onRemove: (kind: LocalizationKind, rowIndex: number) => void; onUpdate: (kind: LocalizationKind, rowIndex: number, language: string, value: string) => void; onTranslate: (kind: LocalizationKind) => void }) {
+function LocalizationTable({ kind, rows, title, token, onAddRecord, onClearAudio, onCopy, onKeyUpdate, onRemove, onReplaceAudio, onUpdate, onTranslate }: { kind: LocalizationKind; rows: LocalizationRow[]; title: string; token: string; onAddRecord: (kind: LocalizationKind) => void; onClearAudio: (rowIndex: number, language: string) => void; onCopy: (value: string, label: string) => void; onKeyUpdate: (kind: LocalizationKind, rowIndex: number, key: string) => void; onRemove: (kind: LocalizationKind, rowIndex: number) => void; onReplaceAudio: (rowIndex: number, language: string, file: File) => void; onUpdate: (kind: LocalizationKind, rowIndex: number, language: string, value: string) => void; onTranslate: (kind: LocalizationKind) => void }) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set());
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const replaceAudioInputRef = useRef<HTMLInputElement>(null);
+  const [playingLocalizationKey, setPlayingLocalizationKey] = useState<string | null>(null);
+  const [replaceAudioTarget, setReplaceAudioTarget] = useState<{ rowIndex: number; language: string } | null>(null);
   const gridTemplateColumns = "72px 220px minmax(280px, 1fr) 172px";
+  const isAudioLocalization = kind === "audioLocalization";
+
+  const audioLocalizationUrl = (assetName: string) => `${location.origin}/assets/name/${encodeURIComponent(assetName)}?token=${encodeURIComponent(token)}`;
+
+  const toggleLocalizationAudio = async (playKey: string, assetName: string) => {
+    const audio = audioRef.current;
+    const name = assetName.trim();
+    if (!audio || !name) return;
+
+    if (playingLocalizationKey === playKey && !audio.paused) {
+      audio.pause();
+      setPlayingLocalizationKey(null);
+      return;
+    }
+
+    audio.pause();
+    audio.currentTime = 0;
+    audio.src = audioLocalizationUrl(name);
+    setPlayingLocalizationKey(playKey);
+    try {
+      await audio.play();
+    } catch {
+      setPlayingLocalizationKey(null);
+    }
+  };
+
+  const requestAudioReplacement = (rowIndex: number, language: string) => {
+    setReplaceAudioTarget({ rowIndex, language });
+    if (replaceAudioInputRef.current) {
+      replaceAudioInputRef.current.value = "";
+      replaceAudioInputRef.current.click();
+    }
+  };
+
+  const replaceSelectedAudio = (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file || !replaceAudioTarget) return;
+    onReplaceAudio(replaceAudioTarget.rowIndex, replaceAudioTarget.language, file);
+    setReplaceAudioTarget(null);
+  };
+
+  const localizedValue = (rowKey: string, rowIndex: number, language: string) => {
+    const value = rows[rowIndex]?.values[language] ?? "";
+    const playKey = `${rowKey}:${language}`;
+    const isPlaying = playingLocalizationKey === playKey;
+
+    return (
+      <div className={isAudioLocalization ? "localized-value audio-localized-value" : "localized-value"}>
+        <span>{language.toUpperCase()}</span>
+        <Input className="localization-value" value={value} onChange={event => onUpdate(kind, rowIndex, language, event.target.value)} />
+        {isAudioLocalization && (
+          <div className="audio-value-tools">
+            <Button variant="outline" size="icon-sm" disabled={!value.trim()} onClick={() => void toggleLocalizationAudio(playKey, value)} title={isPlaying ? "Pause audio preview" : "Play audio preview"} aria-label={isPlaying ? `Pause ${language.toUpperCase()} audio preview` : `Play ${language.toUpperCase()} audio preview`}>
+              {isPlaying ? <Pause /> : <Play />}
+            </Button>
+            <Button variant="outline" size="icon-sm" onClick={() => requestAudioReplacement(rowIndex, language)} title="Replace audio file" aria-label={`Replace ${language.toUpperCase()} audio file`}>
+              <Upload />
+            </Button>
+            <Button variant="outline" size="icon-sm" disabled={value === "default.ogg"} onClick={() => onClearAudio(rowIndex, language)} title="Use default audio" aria-label={`Use default audio for ${language.toUpperCase()}`}>
+              <Trash2 />
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <Card className="table-shell">
       <div className="table-toolbar localization-tools">
@@ -731,6 +899,8 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onCopy, onKe
         </div>
       </div>
       <div className="localization-table">
+        {isAudioLocalization && <audio ref={audioRef} className="hidden" onEnded={() => setPlayingLocalizationKey(null)} />}
+        {isAudioLocalization && <input ref={replaceAudioInputRef} type="file" className="hidden" accept="audio/*" onChange={event => replaceSelectedAudio(event.currentTarget.files)} />}
         <div className="localization-grid table-head" style={{ gridTemplateColumns }}><span>No.</span><span>Key</span><span>Value</span><span>Tools</span></div>
         {rows.map((row, rowIndex) => {
           const rowKey = row.id ?? row.key;
@@ -740,7 +910,7 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onCopy, onKe
               <div className="localization-grid" style={{ gridTemplateColumns }}>
                 <span className="row-no">{rows.length - rowIndex}</span>
                 <Input className="key-input" value={row.key} onChange={event => onKeyUpdate(kind, rowIndex, event.target.value)} aria-label={`Localization key ${rowIndex + 1}`} />
-                <div className="localized-value"><span>EN</span><Input className="localization-value" value={row.values.en ?? ""} onChange={event => onUpdate(kind, rowIndex, "en", event.target.value)} /></div>
+                {localizedValue(rowKey, rowIndex, "en")}
                 <div className="toolset localization-toolset">
                   <Button variant="outline" size="icon-sm" onClick={() => setExpandedRows(current => {
                     const next = new Set(current);
@@ -757,7 +927,7 @@ function LocalizationTable({ kind, rows, title, token, onAddRecord, onCopy, onKe
                 <div className="localization-grid localization-secondary-row" style={{ gridTemplateColumns }} key={language}>
                   <span />
                   <span />
-                  <div className="localized-value"><span>{language.toUpperCase()}</span><Input className="localization-value" value={row.values[language] ?? ""} onChange={event => onUpdate(kind, rowIndex, language, event.target.value)} /></div>
+                  {localizedValue(rowKey, rowIndex, language)}
                   <span />
                 </div>
               ))}
