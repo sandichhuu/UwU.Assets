@@ -1,0 +1,29 @@
+services:
+  uwu-assets:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: uwu-assets:local
+    container_name: uwu-assets
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SQLITE_DATABASE_PATH: /app/data/uwu-assets.sqlite
+      ASSET_STORAGE_PATH: /app/data/assets
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "--eval",
+          "fetch('http://127.0.0.1:3000/').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
