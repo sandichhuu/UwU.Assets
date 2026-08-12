@@ -1,0 +1,43 @@
+export const schema = `
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS assets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  original_name TEXT NOT NULL,
+  name TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK (kind IN ('Image', 'Audio', 'Video')),
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  mime_type TEXT NOT NULL DEFAULT '',
+  metadata_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_assets_project_kind ON assets(project_id, kind);
+
+CREATE TABLE IF NOT EXISTS localization_entries (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('audioLocalization', 'textLocalization')),
+  key TEXT NOT NULL,
+  values_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(project_id, kind, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_localization_project_kind ON localization_entries(project_id, kind);
+
+CREATE TABLE IF NOT EXISTS project_settings (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  asset_token TEXT NOT NULL,
+  gpt_api_token TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
