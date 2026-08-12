@@ -404,7 +404,8 @@ h2 {
 }
 
 .data-table,
-.localization-table {
+.localization-table,
+.audit-table {
   overflow-x: auto;
 }
 
@@ -437,6 +438,7 @@ h2 {
 }
 
 .asset-row:not(.table-head):hover,
+.audit-row:not(.table-head):hover,
 .localization-row-group:hover {
   background: hsl(207 100% 98%);
 }
@@ -627,6 +629,34 @@ h2 {
   border-top: 1px solid hsl(207 45% 94%);
   color: #6f7e8e;
   font-size: 13px;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: 190px minmax(150px, 220px) minmax(160px, 220px) minmax(180px, 260px) minmax(260px, 1fr);
+  gap: 16px;
+  align-items: center;
+  min-width: 980px;
+  padding: 14px 18px;
+  border-bottom: 1px solid hsl(207 45% 94%);
+}
+
+.audit-row strong,
+.audit-row span,
+.audit-row small {
+  min-width: 0;
+}
+
+.audit-row strong {
+  color: hsl(215 42% 18%);
+}
+
+.audit-row small {
+  display: block;
+  margin-top: 3px;
+  color: #6f7e8e;
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .database-empty-state {

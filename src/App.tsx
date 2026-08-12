@@ -3,6 +3,7 @@ import {
   Copy,
   Download,
   HardDrive,
+  History,
   FileAudio,
   FileImage,
   FileVideo,
@@ -31,7 +32,7 @@ import "./index.css";
 
 type AssetKind = "Image" | "Audio" | "Video";
 type LocalizationKind = "audioLocalization" | "textLocalization";
-type Tab = AssetKind | "Audio Localization" | "Text Localization" | "Settings";
+type Tab = AssetKind | "Audio Localization" | "Text Localization" | "Audit Logs" | "Settings";
 
 type Asset = {
   id: string;
@@ -59,6 +60,17 @@ type Project = {
   assets: Record<AssetKind, Asset[]>;
   audioLocalization: LocalizationRow[];
   textLocalization: LocalizationRow[];
+};
+
+type AuditLog = {
+  id: string;
+  actorUsername: string;
+  actorRole: string;
+  action: string;
+  targetType: string;
+  targetName: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
 };
 
 type UploadProgress = {
@@ -94,7 +106,7 @@ type AuthUser = {
 const assetPageSize = 50;
 const selectedProjectStorageKey = "uwu-assets:selectedProjectId";
 const selectedTabStorageKey = "uwu-assets:selectedTab";
-const tabs: Tab[] = ["Image", "Audio", "Video", "Audio Localization", "Text Localization", "Settings"];
+const tabs: Tab[] = ["Image", "Audio", "Video", "Audio Localization", "Text Localization", "Audit Logs", "Settings"];
 const languages = ["en", "vi", "ja", "ko", "th", "zh"];
 const primaryLanguage = "en";
 const secondaryLanguages = languages.filter(language => language !== primaryLanguage);
@@ -269,6 +281,8 @@ export function App() {
   const [assetHasMore, setAssetHasMore] = useState<Record<AssetKind, boolean>>({ Image: true, Audio: true, Video: true });
   const [isLoadingMoreAssets, setIsLoadingMoreAssets] = useState(false);
   const [storageUsage, setStorageUsage] = useState<StorageUsage | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [isLoadingAuditLogs, setIsLoadingAuditLogs] = useState(false);
   const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const [isAddAccountDialogOpen, setIsAddAccountDialogOpen] = useState(false);
   const [accountUsers, setAccountUsers] = useState<AuthUser[]>([]);
@@ -285,6 +299,8 @@ export function App() {
     activeTab === "Audio Localization" ? "audioLocalization" : activeTab === "Text Localization" ? "textLocalization" : null;
   const tabAssetCount = activeLocalizationKind
     ? activeProject?.[activeLocalizationKind].length ?? 0
+    : activeTab === "Audit Logs"
+      ? auditLogs.length
     : activeTab === "Settings"
       ? 2
       : isAssetTab(activeTab)
@@ -362,6 +378,22 @@ export function App() {
     setAccountUsers(data.users);
   };
 
+  const loadAuditLogs = async (projectId: string) => {
+    setIsLoadingAuditLogs(true);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/audit-logs?limit=100`);
+      if (!response.ok) throw new Error("Could not load audit logs");
+      const data = (await response.json()) as { auditLogs: AuditLog[] };
+      setAuditLogs(data.auditLogs);
+    } finally {
+      setIsLoadingAuditLogs(false);
+    }
+  };
+
+  const refreshAuditLogsIfOpen = async (projectId: string) => {
+    if (activeTab === "Audit Logs") await loadAuditLogs(projectId);
+  };
+
   const openAccountDialog = () => {
     setNewAccountForm({ username: "", password: "", role: "readonly" });
     setIsAccountPanelOpen(true);
@@ -399,6 +431,12 @@ export function App() {
       loadProject(activeProjectId).catch(error => showToast.error(String(error)));
     }
   }, [activeProjectId, authUser?.id, authUser?.mustChangePassword]);
+
+  useEffect(() => {
+    if (authUser && !authUser.mustChangePassword && activeProjectId && activeTab === "Audit Logs") {
+      loadAuditLogs(activeProjectId).catch(error => showToast.error(error instanceof Error ? error.message : String(error)));
+    }
+  }, [activeProjectId, activeTab, authUser?.id, authUser?.mustChangePassword]);
 
   useEffect(() => {
     if (
@@ -539,6 +577,7 @@ export function App() {
 
       showProgress("Refreshing assets", "Loading saved database rows");
       await loadProject(activeProject.id);
+      await refreshAuditLogsIfOpen(activeProject.id);
       await loadStorageUsage();
       completedSteps = totalSteps;
       setUploadProgress({ title: "Upload complete", detail: `Saved ${savedCount} ${kind.toLowerCase()} asset(s)`, percent: 100 });
@@ -556,6 +595,7 @@ export function App() {
     if (!activeProject) return;
     await fetch(`/api/assets/${encodeURIComponent(asset.id)}`, { method: "DELETE" });
     await loadProject(activeProject.id);
+    await refreshAuditLogsIfOpen(activeProject.id);
     await loadStorageUsage();
     showToast.success(`Removed ${asset.name} from database`);
   };
@@ -610,6 +650,7 @@ export function App() {
       setUploadProgress({ title: "Saving localization", detail: `${currentRow.key} ${language.toUpperCase()}`, percent: 80 });
       await saveLocalization("audioLocalization", row);
       await loadProject(activeProject.id);
+      await refreshAuditLogsIfOpen(activeProject.id);
       await loadStorageUsage();
       showToast.success(`Replaced ${language.toUpperCase()} audio for ${currentRow.key}`);
     } catch (error) {
@@ -638,6 +679,7 @@ export function App() {
     if (!row?.id) return;
     await fetch(`/api/localization/${encodeURIComponent(row.id)}`, { method: "DELETE" });
     await loadProject(activeProject.id);
+    await refreshAuditLogsIfOpen(activeProject.id);
     showToast.success("Removed localization row from database");
   };
 
@@ -660,6 +702,7 @@ export function App() {
       values: Object.fromEntries(languages.map(language => [language, defaultValue])),
     });
     await loadProject(activeProject.id);
+    await refreshAuditLogsIfOpen(activeProject.id);
     await loadStorageUsage();
     showToast.success("Added localization record to database");
   };
@@ -676,6 +719,7 @@ export function App() {
     });
     await Promise.all(rows.map(row => saveLocalization(kind, row)));
     await loadProject(activeProject.id);
+    await refreshAuditLogsIfOpen(activeProject.id);
     await loadStorageUsage();
     showToast.success("Saved AI translations to database");
   };
@@ -687,6 +731,7 @@ export function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ assetToken: nextToken, gptApiToken: nextGptApiToken }),
     });
+    await refreshAuditLogsIfOpen(activeProject.id);
   };
 
   const generateToken = () => {
@@ -900,7 +945,7 @@ export function App() {
         </section>}
         {!isAccountPanelOpen && <nav className="tabbar" aria-label="Asset tabs">
           {visibleTabs.map(tab => {
-            const Icon = tab === "Image" ? FileImage : tab === "Audio" ? FileAudio : tab === "Video" ? FileVideo : tab === "Settings" ? Settings : Globe2;
+            const Icon = tab === "Image" ? FileImage : tab === "Audio" ? FileAudio : tab === "Video" ? FileVideo : tab === "Audit Logs" ? History : tab === "Settings" ? Settings : Globe2;
             return <button className={activeTab === tab ? "tab is-active" : "tab"} key={tab} onClick={() => { setIsAccountPanelOpen(false); setActiveTab(tab); }}><Icon />{tab}</button>;
           })}
         </nav>}
@@ -917,6 +962,8 @@ export function App() {
             />
           ) : activeTab === "Settings" ? (
             <SettingPanel canManage={canManageAssets} assetToken={token} gptApiToken={gptApiToken} projectName={activeProject.name} onCopy={copyToClipboard} onDeleteProject={() => { setDeleteProjectName(""); setIsDeleteProjectDialogOpen(true); }} onGenerateToken={generateToken} onGptApiTokenChange={updateGptApiToken} />
+          ) : activeTab === "Audit Logs" ? (
+            <AuditLogTable logs={auditLogs} isLoading={isLoadingAuditLogs} />
           ) : activeLocalizationKind ? (
             <LocalizationTable canManage={canManageAssets} kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
           ) : (
@@ -1122,6 +1169,42 @@ function ConfirmAssetDeleteModal({ asset, onCancel, onConfirm }: { asset: Asset;
         </div>
       </div>
     </div>
+  );
+}
+
+function formatAuditTime(value: string) {
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function auditDetailsLabel(details: Record<string, unknown>) {
+  const entries = Object.entries(details).filter(([, value]) => value !== null && value !== undefined && value !== "");
+  if (!entries.length) return "No extra details";
+  return entries
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)
+    .join(" · ");
+}
+
+function AuditLogTable({ logs, isLoading }: { logs: AuditLog[]; isLoading: boolean }) {
+  return (
+    <Card className="table-shell">
+      <div className="table-toolbar"><div><h2>Audit Logs</h2><p>Project action history with the signed-in actor for each change.</p></div></div>
+      <div className="audit-table">
+        <div className="audit-row table-head"><span>Time</span><span>Actor</span><span>Action</span><span>Target</span><span>Details</span></div>
+        {logs.map(log => (
+          <div className="audit-row" key={log.id}>
+            <span>{formatAuditTime(log.createdAt)}</span>
+            <div><strong>{log.actorUsername}</strong><small>{log.actorRole}</small></div>
+            <strong>{log.action}</strong>
+            <div><span>{log.targetName ?? log.targetType}</span><small>{log.targetType}</small></div>
+            <small>{auditDetailsLabel(log.details)}</small>
+          </div>
+        ))}
+        {!logs.length && <div className="empty-state"><History /><span>{isLoading ? "Loading audit logs..." : "No audit logs for this project yet."}</span></div>}
+      </div>
+    </Card>
   );
 }
 

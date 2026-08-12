@@ -44,6 +44,20 @@ export type ProjectSettingsRecord = {
   updatedAt: string;
 };
 
+export type AuditLogRecord = {
+  id: string;
+  projectId: string;
+  actorId: string | null;
+  actorUsername: string;
+  actorRole: string;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  targetName: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
+};
+
 type ProjectRow = {
   id: string;
   name: string;
@@ -82,6 +96,20 @@ type ProjectSettingsRow = {
   asset_token: string;
   gpt_api_token: string;
   updated_at: string;
+};
+
+type AuditLogRow = {
+  id: string;
+  project_id: string;
+  actor_id: string | null;
+  actor_username: string;
+  actor_role: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  target_name: string | null;
+  details_json: string;
+  created_at: string;
 };
 
 const db = getDatabase();
@@ -173,6 +201,12 @@ const deleteLocalizationQuery = db.query(`
   WHERE id = $id
 `);
 
+const getLocalizationByIdQuery = db.query(`
+  SELECT id, project_id, kind, key, values_json, created_at, updated_at
+  FROM localization_entries
+  WHERE id = $id
+`);
+
 const getSettingsQuery = db.query(`
   SELECT project_id, asset_token, gpt_api_token, updated_at
   FROM project_settings
@@ -187,6 +221,20 @@ const upsertSettingsQuery = db.query(`
     gpt_api_token = excluded.gpt_api_token,
     updated_at = datetime('now')
   RETURNING project_id, asset_token, gpt_api_token, updated_at
+`);
+
+const insertAuditLogQuery = db.query(`
+  INSERT INTO audit_logs (id, project_id, actor_id, actor_username, actor_role, action, target_type, target_id, target_name, details_json)
+  VALUES ($id, $projectId, $actorId, $actorUsername, $actorRole, $action, $targetType, $targetId, $targetName, $detailsJson)
+  RETURNING id, project_id, actor_id, actor_username, actor_role, action, target_type, target_id, target_name, details_json, created_at
+`);
+
+const listAuditLogsQuery = db.query(`
+  SELECT id, project_id, actor_id, actor_username, actor_role, action, target_type, target_id, target_name, details_json, created_at
+  FROM audit_logs
+  WHERE project_id = $projectId
+  ORDER BY created_at DESC, id DESC
+  LIMIT $limit OFFSET $offset
 `);
 
 export function createProject(name: string) {
@@ -296,6 +344,11 @@ export function deleteLocalization(id: string) {
   return deleteLocalizationQuery.run({ id }).changes > 0;
 }
 
+export function getLocalizationById(id: string) {
+  const row = getLocalizationByIdQuery.get({ id }) as LocalizationRow | null;
+  return row ? mapLocalization(row) : null;
+}
+
 export function getProjectSettings(projectId: string) {
   const row = getSettingsQuery.get({ projectId }) as ProjectSettingsRow | null;
   return row ? mapProjectSettings(row) : upsertProjectSettings(projectId, `asset_tok_${randomUUID().replaceAll("-", "").slice(0, 24)}`, "");
@@ -303,6 +356,37 @@ export function getProjectSettings(projectId: string) {
 
 export function upsertProjectSettings(projectId: string, assetToken: string, gptApiToken: string) {
   return mapProjectSettings(upsertSettingsQuery.get({ projectId, assetToken, gptApiToken }) as ProjectSettingsRow);
+}
+
+export function recordAuditLog(input: {
+  projectId: string;
+  actorId?: string | null;
+  actorUsername: string;
+  actorRole: string;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+  targetName?: string | null;
+  details?: Record<string, unknown>;
+}) {
+  return mapAuditLog(
+    insertAuditLogQuery.get({
+      id: `aud-${randomUUID()}`,
+      projectId: input.projectId,
+      actorId: input.actorId ?? null,
+      actorUsername: input.actorUsername,
+      actorRole: input.actorRole,
+      action: input.action,
+      targetType: input.targetType,
+      targetId: input.targetId ?? null,
+      targetName: input.targetName ?? null,
+      detailsJson: JSON.stringify(input.details ?? {}),
+    }) as AuditLogRow,
+  );
+}
+
+export function listAuditLogs(projectId: string, options?: { limit?: number; offset?: number }) {
+  return (listAuditLogsQuery.all({ projectId, limit: options?.limit ?? 100, offset: options?.offset ?? 0 }) as AuditLogRow[]).map(mapAuditLog);
 }
 
 function mapProject(row: ProjectRow): ProjectRecord {
@@ -350,5 +434,21 @@ function mapProjectSettings(row: ProjectSettingsRow): ProjectSettingsRecord {
     assetToken: row.asset_token,
     gptApiToken: row.gpt_api_token,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapAuditLog(row: AuditLogRow): AuditLogRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    actorId: row.actor_id,
+    actorUsername: row.actor_username,
+    actorRole: row.actor_role,
+    action: row.action,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    targetName: row.target_name,
+    details: JSON.parse(row.details_json) as Record<string, unknown>,
+    createdAt: row.created_at,
   };
 }

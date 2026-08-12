@@ -11,11 +11,14 @@ import {
   deleteProject,
   getAssetById,
   getAssetByName,
+  getLocalizationById,
   getProject,
   getProjectSettings,
   listAssets,
+  listAuditLogs,
   listLocalization,
   listProjects,
+  recordAuditLog,
   updateAssetConversion,
   upsertLocalization,
   upsertProjectSettings,
@@ -150,6 +153,14 @@ function hasRole(user: AuthUser, minimumRole: UserRole) {
 
 function isAccountManager(user: AuthUser) {
   return user.role === "admin" || user.role === "manager";
+}
+
+function auditActor(user: AuthUser) {
+  return {
+    actorId: user.id,
+    actorUsername: user.username,
+    actorRole: user.role,
+  };
 }
 
 async function convertWithFfmpeg(content: Buffer, sourceName: string, outputExtension: string, args: string[], errorMessage: string) {
@@ -477,6 +488,17 @@ const server = serve({
         }
 
         const project = createProject(name);
+        const user = currentUser(req);
+        if (user) {
+          recordAuditLog({
+            projectId: project.id,
+            ...auditActor(user),
+            action: "created project",
+            targetType: "project",
+            targetId: project.id,
+            targetName: project.name,
+          });
+        }
 
         return Response.json({ project }, { status: 201 });
       },
@@ -505,7 +527,30 @@ const server = serve({
       async DELETE(req) {
         const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
-        return Response.json({ deleted: deleteProject(req.params.projectId) });
+        const project = getProject(req.params.projectId);
+        const user = currentUser(req);
+        if (project && user) {
+          recordAuditLog({
+            projectId: project.id,
+            ...auditActor(user),
+            action: "deleted project",
+            targetType: "project",
+            targetId: project.id,
+            targetName: project.name,
+          });
+        }
+        const deleted = deleteProject(req.params.projectId);
+        return Response.json({ deleted });
+      },
+    },
+
+    "/api/projects/:projectId/audit-logs": {
+      async GET(req) {
+        const unauthorized = authError(req);
+        if (unauthorized) return unauthorized;
+        const project = getProject(req.params.projectId);
+        if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
+        return Response.json({ auditLogs: listAuditLogs(project.id, assetPageParams(req)) });
       },
     },
 
@@ -575,6 +620,18 @@ const server = serve({
           conversionStatus: isVideo ? "queued" : "ready",
           conversionProgress: isVideo ? 0 : 100,
         });
+        const user = currentUser(req);
+        if (user) {
+          recordAuditLog({
+            projectId: project.id,
+            ...auditActor(user),
+            action: "uploaded asset",
+            targetType: "asset",
+            targetId: asset.id,
+            targetName: asset.name,
+            details: { kind: asset.kind, originalName: asset.originalName, sizeBytes: asset.sizeBytes },
+          });
+        }
 
         if (isVideo) {
           void convertStoredVideoInBackground(asset.id, writePath, assetFilePath(assetName));
@@ -597,6 +654,18 @@ const server = serve({
           if (existsSync(sourcePath)) unlinkSync(sourcePath);
           const previewPath = assetPreviewFilePath(asset.name);
           if (existsSync(previewPath)) unlinkSync(previewPath);
+          const user = currentUser(req);
+          if (user) {
+            recordAuditLog({
+              projectId: asset.projectId,
+              ...auditActor(user),
+              action: "deleted asset",
+              targetType: "asset",
+              targetId: asset.id,
+              targetName: asset.name,
+              details: { kind: asset.kind, originalName: asset.originalName },
+            });
+          }
         }
         return Response.json({ deleted });
       },
@@ -639,15 +708,27 @@ const server = serve({
         const key = body.key?.trim();
         if (!key) return Response.json({ error: "Localization key is required" }, { status: 400 });
 
-        return Response.json({
-          row: upsertLocalization({
-            id: body.id,
-            projectId: project.id,
-            kind,
-            key,
-            values: body.values ?? {},
-          }),
+        const row = upsertLocalization({
+          id: body.id,
+          projectId: project.id,
+          kind,
+          key,
+          values: body.values ?? {},
         });
+        const user = currentUser(req);
+        if (user) {
+          recordAuditLog({
+            projectId: project.id,
+            ...auditActor(user),
+            action: body.id ? "updated localization" : "created localization",
+            targetType: "localization",
+            targetId: row.id,
+            targetName: row.key,
+            details: { kind, languages: Object.keys(row.values) },
+          });
+        }
+
+        return Response.json({ row });
       },
     },
 
@@ -655,7 +736,21 @@ const server = serve({
       async DELETE(req) {
         const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
-        return Response.json({ deleted: deleteLocalization(req.params.localizationId) });
+        const row = getLocalizationById(req.params.localizationId);
+        const deleted = deleteLocalization(req.params.localizationId);
+        const user = currentUser(req);
+        if (deleted && row && user) {
+          recordAuditLog({
+            projectId: row.projectId,
+            ...auditActor(user),
+            action: "deleted localization",
+            targetType: "localization",
+            targetId: row.id,
+            targetName: row.key,
+            details: { kind: row.kind },
+          });
+        }
+        return Response.json({ deleted });
       },
     },
 
@@ -677,13 +772,29 @@ const server = serve({
         const current = getProjectSettings(project.id);
         const body = (await req.json()) as { assetToken?: string; gptApiToken?: string };
 
-        return Response.json({
-          settings: upsertProjectSettings(
-            project.id,
-            body.assetToken?.trim() || current.assetToken,
-            body.gptApiToken ?? current.gptApiToken,
-          ),
-        });
+        const settings = upsertProjectSettings(
+          project.id,
+          body.assetToken?.trim() || current.assetToken,
+          body.gptApiToken ?? current.gptApiToken,
+        );
+        const changedFields = [
+          settings.assetToken !== current.assetToken ? "assetToken" : null,
+          settings.gptApiToken !== current.gptApiToken ? "gptApiToken" : null,
+        ].filter(Boolean);
+        const user = currentUser(req);
+        if (changedFields.length && user) {
+          recordAuditLog({
+            projectId: project.id,
+            ...auditActor(user),
+            action: "updated settings",
+            targetType: "settings",
+            targetId: project.id,
+            targetName: project.name,
+            details: { changedFields },
+          });
+        }
+
+        return Response.json({ settings });
       },
     },
   },
