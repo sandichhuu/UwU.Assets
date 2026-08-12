@@ -179,6 +179,20 @@ const updateAssetConversionQuery = db.query(`
   WHERE id = $id
 `);
 
+const updateAssetFileQuery = db.query(`
+  UPDATE assets
+  SET original_name = $originalName,
+      size_bytes = $sizeBytes,
+      mime_type = $mimeType,
+      metadata_json = $metadataJson,
+      conversion_status = $conversionStatus,
+      conversion_progress = $conversionProgress,
+      conversion_error = $conversionError,
+      updated_at = datetime('now')
+  WHERE id = $id
+  RETURNING id, project_id, original_name, name, kind, size_bytes, mime_type, metadata_json, conversion_status, conversion_progress, conversion_error, created_at, updated_at
+`);
+
 const listLocalizationQuery = db.query(`
   SELECT id, project_id, kind, key, values_json, created_at, updated_at
   FROM localization_entries
@@ -316,6 +330,29 @@ export function updateAssetConversion(id: string, status: AssetRecord["conversio
     error,
     sizeBytes: sizeBytes ?? null,
   }).changes > 0;
+}
+
+export function updateAssetFile(input: {
+  id: string;
+  originalName: string;
+  sizeBytes: number;
+  mimeType: string;
+  metadata?: string[];
+  conversionStatus?: AssetRecord["conversionStatus"];
+  conversionProgress?: number;
+  conversionError?: string;
+}) {
+  const row = updateAssetFileQuery.get({
+    id: input.id,
+    originalName: input.originalName,
+    sizeBytes: input.sizeBytes,
+    mimeType: input.mimeType,
+    metadataJson: JSON.stringify(input.metadata ?? []),
+    conversionStatus: input.conversionStatus ?? "ready",
+    conversionProgress: input.conversionProgress ?? 100,
+    conversionError: input.conversionError ?? "",
+  }) as AssetRow | null;
+  return row ? mapAsset(row) : null;
 }
 
 export function listLocalization(projectId: string, kind: LocalizationKind) {

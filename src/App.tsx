@@ -16,6 +16,7 @@ import {
   Pause,
   Play,
   Plus,
+  RefreshCw,
   Settings,
   Trash2,
   TriangleAlert,
@@ -600,6 +601,55 @@ export function App() {
     showToast.success(`Removed ${asset.name} from database`);
   };
 
+  const replaceAsset = async (asset: Asset, file: File) => {
+    if (!activeProject) return;
+    if (asset.kind === "Image" && !isSupportedImageFile(file)) {
+      showToast.warning("Image assets must be .png, .svg, .jpg, or .webp");
+      return;
+    }
+
+    const startedAt = performance.now();
+    const stopProcessingProgress = startProcessingProgress(
+      setUploadProgress,
+      asset.kind === "Video" ? "Replacing video" : asset.kind === "Audio" ? "Replacing audio" : "Replacing image",
+      `${file.name} -> ${asset.name}`,
+      12,
+    );
+
+    try {
+      const normalizedFile = asset.kind === "Image" ? await normalizeImageToWebp(file) : file;
+      const previewFile = asset.kind === "Image" ? await generateImagePreview(file, asset.name) : null;
+      const response = await fetch(`/api/assets/${encodeURIComponent(asset.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          originalName: file.name,
+          mimeType: normalizedFile.type,
+          contentBase64: await fileToBase64(normalizedFile),
+          previewContentBase64: previewFile ? await fileToBase64(previewFile) : undefined,
+          metadata: [
+            asset.kind === "Image" ? "converted to webp" : asset.kind === "Video" ? "converted to webm" : "converted to ogg",
+            file.type || "unknown mime",
+            `replaced ${asset.name}`,
+          ],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? `Could not replace ${asset.name}`);
+
+      await loadProject(activeProject.id);
+      await refreshAuditLogsIfOpen(activeProject.id);
+      await loadStorageUsage();
+      showToast.success(`Replaced ${asset.name} without changing its file name`);
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      stopProcessingProgress();
+      await wait(Math.max(0, 700 - (performance.now() - startedAt)));
+      setUploadProgress(null);
+    }
+  };
+
   const saveLocalization = async (kind: LocalizationKind, row: LocalizationRow) => {
     if (!activeProject || !row.key.trim()) return;
     await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/localization/${kind}`, {
@@ -968,7 +1018,7 @@ export function App() {
           ) : activeLocalizationKind ? (
             <LocalizationTable canManage={canManageAssets} kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
           ) : (
-            <AssetTable canManage={canManageAssets} assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={assetPreviewUrl} onPreview={asset => setPreviewAsset({ asset, previewUrl: assetPreviewUrl(asset), originalUrl: assetUrl(asset, "name") })} />
+            <AssetTable canManage={canManageAssets} assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onReplace={replaceAsset} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={assetPreviewUrl} onPreview={asset => setPreviewAsset({ asset, previewUrl: assetPreviewUrl(asset), originalUrl: assetUrl(asset, "name") })} />
           )}
         </div>
       </section>
@@ -1209,14 +1259,17 @@ function AuditLogTable({ logs, isLoading }: { logs: AuditLog[]; isLoading: boole
   );
 }
 
-function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; audioUrl: (asset: Asset) => string; canManage: boolean; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
+function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoadingMore, onCopy, onDownload, onLoadMore, onUpload, onReplace, onRemove, previewUrl, onPreview }: { assets: Asset[]; assetKind: AssetKind; audioUrl: (asset: Asset) => string; canManage: boolean; hasMore: boolean; isLoadingMore: boolean; onCopy: (asset: Asset, mode: "id" | "name") => void; onDownload: (asset: Asset) => void; onLoadMore: (kind: AssetKind) => void; onUpload: (files: FileList | null) => void; onReplace: (asset: Asset, file: File) => void; onRemove: (asset: Asset) => void; previewUrl: (asset: Asset) => string; onPreview: (asset: Asset) => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playingAssetId, setPlayingAssetId] = useState<string | null>(null);
+  const [replaceTarget, setReplaceTarget] = useState<Asset | null>(null);
   const isImageTable = assetKind === "Image";
   const isAudioTable = assetKind === "Audio";
   const isVideoTable = assetKind === "Video";
+  const accept = assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*";
 
   useEffect(() => {
     const element = loadMoreRef.current;
@@ -1231,7 +1284,23 @@ function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoading
   useEffect(() => {
     audioRef.current?.pause();
     setPlayingAssetId(null);
+    setReplaceTarget(null);
   }, [assetKind]);
+
+  const requestReplacement = (asset: Asset) => {
+    setReplaceTarget(asset);
+    if (replaceInputRef.current) {
+      replaceInputRef.current.value = "";
+      replaceInputRef.current.click();
+    }
+  };
+
+  const replaceSelectedAsset = (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file || !replaceTarget) return;
+    onReplace(replaceTarget, file);
+    setReplaceTarget(null);
+  };
 
   const toggleAudio = async (asset: Asset) => {
     const audio = audioRef.current;
@@ -1256,7 +1325,7 @@ function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoading
 
   return (
     <Card className="table-shell">
-      <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div>{canManage && <div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div>}</div>
+      <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div>{canManage && <div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={accept} onChange={event => onUpload(event.currentTarget.files)} /><input ref={replaceInputRef} type="file" className="hidden" accept={accept} onChange={event => replaceSelectedAsset(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div>}</div>
       <div className="data-table">
         {isAudioTable && <audio ref={audioRef} className="hidden" onEnded={() => setPlayingAssetId(null)} />}
         <div className={isImageTable ? "asset-row image-asset-row table-head" : isVideoTable ? "asset-row video-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span>{isImageTable && <span>Preview</span>}{isVideoTable && <span>Status</span>}<span>Metadata</span><span>Tools</span></div>
@@ -1282,6 +1351,7 @@ function AssetTable({ assets, assetKind, audioUrl, canManage, hasMore, isLoading
               <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "id")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
               <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "name")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
               <Button variant="outline" size="icon-sm" onClick={() => onDownload(asset)} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Download" aria-label="Download"><Download /></Button>
+              {canManage && <Button variant="outline" size="icon-sm" onClick={() => requestReplacement(asset)} title="Replace file, keep name" aria-label={`Replace ${asset.name} without changing its file name`}><RefreshCw /></Button>}
               {canManage && <Button variant="destructive" size="icon-sm" onClick={() => onRemove(asset)} title="Remove" aria-label="Remove"><Trash2 /></Button>}
             </div>
           </div>

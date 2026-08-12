@@ -20,6 +20,7 @@ import {
   listProjects,
   recordAuditLog,
   updateAssetConversion,
+  updateAssetFile,
   upsertLocalization,
   upsertProjectSettings,
   type AssetKind,
@@ -296,7 +297,7 @@ async function assetResponse(req: Request, mode: "id" | "name", key: string) {
     headers: {
       "Content-Type": shouldServePreview ? "image/webp" : asset.mimeType || "application/octet-stream",
       "Content-Disposition": `inline; filename="${(shouldServePreview ? `${asset.name}.preview.webp` : asset.name).replaceAll('"', "")}"`,
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "public, max-age=0, must-revalidate",
     },
   });
 }
@@ -639,6 +640,66 @@ const server = serve({
     },
 
     "/api/assets/:assetId": {
+      async PATCH(req) {
+        const unauthorized = authError(req, "manager");
+        if (unauthorized) return unauthorized;
+        const asset = getAssetById(req.params.assetId);
+        if (!asset) return Response.json({ error: "Asset not found" }, { status: 404 });
+
+        const body = (await req.json()) as {
+          originalName?: string;
+          mimeType?: string;
+          contentBase64?: string;
+          previewContentBase64?: string;
+          metadata?: string[];
+        };
+        if (!body.originalName?.trim() || !body.contentBase64) {
+          return Response.json({ error: "originalName and contentBase64 are required" }, { status: 400 });
+        }
+
+        mkdirSync(assetStoragePath, { recursive: true });
+        const originalContent = Buffer.from(body.contentBase64, "base64");
+        const isVideo = asset.kind === "Video";
+        const assetContent = asset.kind === "Audio" ? await convertAudioToOgg(originalContent, body.originalName.trim()) : originalContent;
+        const mimeType = asset.kind === "Audio" ? "audio/ogg" : isVideo ? "video/webm" : body.mimeType ?? asset.mimeType;
+        const writePath = isVideo ? assetFilePath(sourceVideoAssetName(asset.name)) : assetFilePath(asset.name);
+        await Bun.write(writePath, assetContent);
+
+        if (asset.kind === "Image") {
+          if (!body.previewContentBase64) return Response.json({ error: "Image previewContentBase64 is required" }, { status: 400 });
+          await Bun.write(assetPreviewFilePath(asset.name), Buffer.from(body.previewContentBase64, "base64"));
+        }
+
+        const updatedAsset = updateAssetFile({
+          id: asset.id,
+          originalName: body.originalName.trim(),
+          sizeBytes: assetContent.byteLength,
+          mimeType,
+          metadata: body.metadata,
+          conversionStatus: isVideo ? "queued" : "ready",
+          conversionProgress: isVideo ? 0 : 100,
+        });
+        if (!updatedAsset) return Response.json({ error: "Asset could not be updated" }, { status: 500 });
+
+        const user = currentUser(req);
+        if (user) {
+          recordAuditLog({
+            projectId: asset.projectId,
+            ...auditActor(user),
+            action: "replaced asset",
+            targetType: "asset",
+            targetId: asset.id,
+            targetName: asset.name,
+            details: { kind: asset.kind, originalName: updatedAsset.originalName, sizeBytes: updatedAsset.sizeBytes },
+          });
+        }
+
+        if (isVideo) {
+          void convertStoredVideoInBackground(asset.id, writePath, assetFilePath(asset.name));
+        }
+
+        return Response.json({ asset: updatedAsset });
+      },
       async DELETE(req) {
         const unauthorized = authError(req, "manager");
         if (unauthorized) return unauthorized;
