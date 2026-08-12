@@ -1,0 +1,48 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+node_modules.bun
+
+# Build output and caches
+dist
+.tmp
+.cache
+.bun-cache
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+
+# Logs and runtime files
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+*.pid
+*.pid.lock
+
+# Local databases
+*.sqlite
+*.sqlite-*
+
+# Test and coverage output
+coverage
+*.lcov
+.nyc_output
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+
+# Docker metadata is not needed inside the build context
+Dockerfile*
+.dockerignore
