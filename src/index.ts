@@ -33,8 +33,10 @@ import {
   deleteSession,
   ensureDefaultAdminUser,
   getUserById,
+  getUserByApiToken,
   getSessionUser,
   listUsers,
+  regenerateUserApiToken,
   updateUserEnabled,
   updateUserPassword,
   type AuthUser,
@@ -136,6 +138,11 @@ function clearSessionCookie() {
 function currentUser(req: Request) {
   const sessionId = parseCookies(req).uwu_session;
   const user = sessionId ? getSessionUser(sessionId) : null;
+  return user?.enabled ? user : null;
+}
+
+function tokenUser(token: string | null) {
+  const user = token ? getUserByApiToken(token) : null;
   return user?.enabled ? user : null;
 }
 
@@ -270,7 +277,11 @@ async function assetResponse(req: Request, mode: "id" | "name", key: string) {
   const token = new URL(req.url).searchParams.get("token");
   const settings = getProjectSettings(asset.projectId);
   const user = currentUser(req);
-  if ((!user || user.mustChangePassword) && (!token || token !== settings.assetToken)) {
+  const userFromToken = token === settings.assetToken ? null : tokenUser(token);
+  const hasSessionAccess = Boolean(user && !user.mustChangePassword);
+  const hasProjectTokenAccess = token === settings.assetToken;
+  const hasLoginTokenAccess = Boolean(userFromToken && !userFromToken.mustChangePassword);
+  if (!hasSessionAccess && !hasProjectTokenAccess && !hasLoginTokenAccess) {
     return Response.json({ error: "Invalid asset token" }, { status: 401 });
   }
 
@@ -344,7 +355,7 @@ const server = serve({
 
         const sessionId = createSession(user.id);
         return Response.json(
-          { user },
+          { user, token: user.apiToken },
           {
             headers: {
               "Set-Cookie": sessionCookie(sessionId),
@@ -414,11 +425,19 @@ const server = serve({
         const canUpdateTarget = requester.id === target.id || requester.role === "admin" || (requester.role === "manager" && target.role === "readonly");
         if (!canUpdateTarget) return Response.json({ error: "Permission denied" }, { status: 403 });
 
-        const body = (await req.json()) as { enabled?: boolean; password?: string };
+        const body = (await req.json()) as { enabled?: boolean; password?: string; regenerateToken?: boolean };
         if (typeof body.password === "string") {
           if (body.password.length < 8) return Response.json({ error: "Password must be at least 8 characters" }, { status: 400 });
           if (body.password === "admin") return Response.json({ error: "Password cannot be the default password" }, { status: 400 });
           return Response.json({ user: await updateUserPassword(target.id, body.password) });
+        }
+
+        if (body.regenerateToken === true) {
+          if (!isAccountManager(requester)) return Response.json({ error: "Permission denied" }, { status: 403 });
+          if (requester.role === "manager" && target.role !== "readonly" && requester.id !== target.id) {
+            return Response.json({ error: "Managers can only regenerate readonly account tokens" }, { status: 403 });
+          }
+          return Response.json({ user: regenerateUserApiToken(target.id) });
         }
 
         if (typeof body.enabled === "boolean") {

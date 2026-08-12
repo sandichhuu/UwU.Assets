@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  api_token TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL DEFAULT 'readonly' CHECK (role IN ('admin', 'manager', 'readonly')),
   enabled INTEGER NOT NULL DEFAULT 1,
   must_change_password INTEGER NOT NULL DEFAULT 1,

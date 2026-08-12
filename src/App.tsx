@@ -99,6 +99,7 @@ type UserRole = "admin" | "manager" | "readonly";
 type AuthUser = {
   id: string;
   username: string;
+  apiToken: string;
   role: UserRole;
   enabled: boolean;
   mustChangePassword: boolean;
@@ -478,11 +479,14 @@ export function App() {
     }
   };
 
-  const assetUrl = (asset: Asset, mode: "id" | "name") => {
+  const assetUrl = (asset: Asset, mode: "id" | "name", options?: { includeToken?: boolean }) => {
     const key = mode === "id" ? asset.id : asset.name;
     const path = `/assets/${mode}/${encodeURIComponent(key)}`;
-    return authUser ? `${location.origin}${path}` : `${location.origin}${path}?token=${encodeURIComponent(token)}`;
+    const shouldIncludeToken = options?.includeToken || !authUser;
+    return shouldIncludeToken ? `${location.origin}${path}?token=${encodeURIComponent(token)}` : `${location.origin}${path}`;
   };
+
+  const assetClipboardUrl = (asset: Asset, mode: "id" | "name") => assetUrl(asset, mode, { includeToken: true });
 
   const assetPreviewUrl = (asset: Asset) => {
     const url = assetUrl(asset, "name");
@@ -844,6 +848,19 @@ export function App() {
     showToast.success(`${user.username} ${enabled ? "enabled" : "disabled"}`);
   };
 
+  const regenerateAccountToken = async (user: AuthUser) => {
+    const response = await fetch(`/api/auth/users/${encodeURIComponent(user.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ regenerateToken: true }),
+    });
+    const data = await response.json();
+    if (!response.ok) return showToast.error(data.error ?? "Could not generate account token");
+    if (user.id === authUser?.id) setAuthUser(data.user);
+    await loadAccountUsers();
+    showToast.success(`Generated token for ${user.username}`);
+  };
+
   const removeAccount = async (user: AuthUser) => {
     const response = await fetch(`/api/auth/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
     const data = await response.json();
@@ -904,6 +921,8 @@ export function App() {
               users={accountUsers}
               onAddAccount={() => setIsAddAccountDialogOpen(true)}
               onChangePassword={openPasswordDialog}
+              onCopy={copyToClipboard}
+              onRegenerateToken={regenerateAccountToken}
               onRemoveAccount={removeAccount}
               onUpdateAccountEnabled={updateAccountEnabled}
             />
@@ -1008,6 +1027,8 @@ export function App() {
               users={accountUsers}
               onAddAccount={() => setIsAddAccountDialogOpen(true)}
               onChangePassword={openPasswordDialog}
+              onCopy={copyToClipboard}
+              onRegenerateToken={regenerateAccountToken}
               onRemoveAccount={removeAccount}
               onUpdateAccountEnabled={updateAccountEnabled}
             />
@@ -1018,7 +1039,7 @@ export function App() {
           ) : activeLocalizationKind ? (
             <LocalizationTable canManage={canManageAssets} kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onClearAudio={(rowIndex, language) => updateLocalization("audioLocalization", rowIndex, language, "default.ogg")} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onReplaceAudio={replaceLocalizationAudio} onUpdate={updateLocalization} onTranslate={aiTranslate} />
           ) : (
-            <AssetTable canManage={canManageAssets} assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onReplace={replaceAsset} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={assetPreviewUrl} onPreview={asset => setPreviewAsset({ asset, previewUrl: assetPreviewUrl(asset), originalUrl: assetUrl(asset, "name") })} />
+            <AssetTable canManage={canManageAssets} assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} audioUrl={asset => assetUrl(asset, "name")} hasMore={isAssetTab(activeTab) ? assetHasMore[activeTab] : false} isLoadingMore={isLoadingMoreAssets} onCopy={(asset, mode) => copyToClipboard(assetClipboardUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onLoadMore={loadMoreAssets} onUpload={addUploadedFiles} onReplace={replaceAsset} onRemove={asset => setDeleteAssetTarget(asset)} previewUrl={assetPreviewUrl} onPreview={asset => setPreviewAsset({ asset, previewUrl: assetPreviewUrl(asset), originalUrl: assetUrl(asset, "name") })} />
           )}
         </div>
       </section>
@@ -1511,9 +1532,10 @@ function LocalizationTable({ canManage, kind, rows, title, token, onAddRecord, o
   );
 }
 
-function AccountPanel({ currentUser, users, onAddAccount, onChangePassword, onRemoveAccount, onUpdateAccountEnabled }: { currentUser: AuthUser; users: AuthUser[]; onAddAccount: () => void; onChangePassword: (user: AuthUser) => void; onRemoveAccount: (user: AuthUser) => void; onUpdateAccountEnabled: (user: AuthUser, enabled: boolean) => void }) {
+function AccountPanel({ currentUser, users, onAddAccount, onChangePassword, onCopy, onRegenerateToken, onRemoveAccount, onUpdateAccountEnabled }: { currentUser: AuthUser; users: AuthUser[]; onAddAccount: () => void; onChangePassword: (user: AuthUser) => void; onCopy: (value: string, label: string) => void; onRegenerateToken: (user: AuthUser) => void; onRemoveAccount: (user: AuthUser) => void; onUpdateAccountEnabled: (user: AuthUser, enabled: boolean) => void }) {
   const canManageAccounts = currentUser.role === "admin" || currentUser.role === "manager";
   const canChangePassword = (user: AuthUser) => currentUser.id === user.id || currentUser.role === "admin" || (currentUser.role === "manager" && user.role === "readonly");
+  const canRegenerateToken = (user: AuthUser) => currentUser.role === "admin" || currentUser.id === user.id || user.role === "readonly";
   const canRemove = (user: AuthUser) => currentUser.id !== user.id && (currentUser.role === "admin" || user.role === "readonly");
   const canToggle = (user: AuthUser) => currentUser.id !== user.id && (currentUser.role === "admin" || user.role === "readonly");
 
@@ -1523,12 +1545,13 @@ function AccountPanel({ currentUser, users, onAddAccount, onChangePassword, onRe
         <Card className="table-shell">
           <div className="table-toolbar"><div><h2>Accounts</h2><p>Manager accounts can update readonly accounts only.</p></div><Button onClick={onAddAccount}><Plus />Add Account</Button></div>
           <div className="account-table">
-            <div className="account-table-row table-head"><span>Username</span><span>Role</span><span>Password</span><span>Status</span><span>Tools</span></div>
+            <div className="account-table-row table-head"><span>Username</span><span>Role</span><span>Password</span><span>Token</span><span>Status</span><span>Tools</span></div>
             {users.map(user => (
               <div className="account-table-row" key={user.id}>
                 <strong>{user.username}</strong>
                 <span className="account-role">{user.role}</span>
                 <Button variant="outline" size="sm" disabled={!canChangePassword(user)} onClick={() => onChangePassword(user)}>Change Password</Button>
+                <div className="account-token-cell"><code>{user.apiToken}</code><div className="toolset"><Button variant="outline" size="icon-sm" onClick={() => onCopy(user.apiToken, `Copied token for ${user.username}`)} title="Copy Token" aria-label={`Copy token for ${user.username}`}><Copy /></Button><Button variant="outline" size="icon-sm" disabled={!canRegenerateToken(user)} onClick={() => void onRegenerateToken(user)} title="Generate New Token" aria-label={`Generate new token for ${user.username}`}><RefreshCw /></Button></div></div>
                 <label className="account-enabled"><input type="checkbox" checked={user.enabled} disabled={!canToggle(user)} onChange={event => void onUpdateAccountEnabled(user, event.currentTarget.checked)} /><span>{user.enabled ? "Enabled" : "Disabled"}</span></label>
                 <div className="toolset"><Button variant="destructive" size="sm" disabled={!canRemove(user)} onClick={() => void onRemoveAccount(user)}><Trash2 />Remove</Button></div>
               </div>

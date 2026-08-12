@@ -52,15 +52,24 @@ export function getDatabase() {
   database.run(schema);
   ensureAssetConversionColumns(database);
   ensureAuthTables(database);
-  ensureUserRoleColumn(database);
+  ensureUserColumns(database);
 
   return database;
 }
 
-function ensureUserRoleColumn(db: Database) {
+function ensureUserColumns(db: Database) {
   const columns = db.query("PRAGMA table_info(users)").all() as Array<{ name: string }>;
   const names = new Set(columns.map(column => column.name));
 
+  if (!names.has("api_token")) {
+    db.run("ALTER TABLE users ADD COLUMN api_token TEXT NOT NULL DEFAULT '';");
+    const users = db.query("SELECT id FROM users").all() as Array<{ id: string }>;
+    const updateToken = db.query("UPDATE users SET api_token = $apiToken WHERE id = $id");
+    for (const user of users) {
+      updateToken.run({ id: user.id, apiToken: `login_tok_${crypto.randomUUID().replaceAll("-", "")}` });
+    }
+    db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_token ON users(api_token);");
+  }
   if (!names.has("role")) {
     db.run("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'readonly';");
     db.run("UPDATE users SET role = 'admin' WHERE username = 'admin';");
@@ -91,6 +100,7 @@ function ensureAuthTables(db: Database) {
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
+      api_token TEXT NOT NULL UNIQUE,
       role TEXT NOT NULL DEFAULT 'readonly',
       enabled INTEGER NOT NULL DEFAULT 1,
       must_change_password INTEGER NOT NULL DEFAULT 1,

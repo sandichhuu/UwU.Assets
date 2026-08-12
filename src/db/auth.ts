@@ -4,6 +4,7 @@ import { getDatabase } from "./database";
 export type AuthUser = {
   id: string;
   username: string;
+  apiToken: string;
   role: UserRole;
   enabled: boolean;
   mustChangePassword: boolean;
@@ -15,6 +16,7 @@ type UserRow = {
   id: string;
   username: string;
   password_hash: string;
+  api_token: string;
   role: UserRole;
   enabled: number;
   must_change_password: number;
@@ -24,6 +26,7 @@ type SessionRow = {
   session_id: string;
   user_id: string;
   username: string;
+  api_token: string;
   role: UserRole;
   enabled: number;
   must_change_password: number;
@@ -35,24 +38,24 @@ const defaultUsername = "admin";
 const defaultPassword = "admin";
 
 const getUserByUsernameQuery = db.query(`
-  SELECT id, username, password_hash, role, enabled, must_change_password
+  SELECT id, username, password_hash, api_token, role, enabled, must_change_password
   FROM users
   WHERE username = $username
 `);
 
 const getUserByIdQuery = db.query(`
-  SELECT id, username, password_hash, role, enabled, must_change_password
+  SELECT id, username, password_hash, api_token, role, enabled, must_change_password
   FROM users
   WHERE id = $id
 `);
 
 const insertUserQuery = db.query(`
-  INSERT INTO users (id, username, password_hash, role, enabled, must_change_password)
-  VALUES ($id, $username, $passwordHash, $role, 1, $mustChangePassword)
+  INSERT INTO users (id, username, password_hash, api_token, role, enabled, must_change_password)
+  VALUES ($id, $username, $passwordHash, $apiToken, $role, 1, $mustChangePassword)
 `);
 
 const listUsersQuery = db.query(`
-  SELECT id, username, password_hash, role, enabled, must_change_password
+  SELECT id, username, password_hash, api_token, role, enabled, must_change_password
   FROM users
   ORDER BY
     CASE role WHEN 'admin' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END,
@@ -79,13 +82,20 @@ const updatePasswordQuery = db.query(`
   WHERE id = $id
 `);
 
+const updateApiTokenQuery = db.query(`
+  UPDATE users
+  SET api_token = $apiToken,
+      updated_at = datetime('now')
+  WHERE id = $id
+`);
+
 const insertSessionQuery = db.query(`
   INSERT INTO sessions (id, user_id, expires_at)
   VALUES ($id, $userId, datetime('now', '+${sessionDays} days'))
 `);
 
 const getSessionQuery = db.query(`
-  SELECT sessions.id AS session_id, users.id AS user_id, users.username, users.role, users.enabled, users.must_change_password
+  SELECT sessions.id AS session_id, users.id AS user_id, users.username, users.api_token, users.role, users.enabled, users.must_change_password
   FROM sessions
   JOIN users ON users.id = sessions.user_id
   WHERE sessions.id = $sessionId
@@ -102,6 +112,16 @@ const deleteExpiredSessionsQuery = db.query(`
   WHERE expires_at <= datetime('now')
 `);
 
+const getUserByApiTokenQuery = db.query(`
+  SELECT id, username, password_hash, api_token, role, enabled, must_change_password
+  FROM users
+  WHERE api_token = $apiToken
+`);
+
+function createApiToken() {
+  return `login_tok_${randomUUID().replaceAll("-", "")}`;
+}
+
 export async function ensureDefaultAdminUser() {
   const existing = getUserByUsername(defaultUsername);
   if (existing) return existing;
@@ -111,6 +131,7 @@ export async function ensureDefaultAdminUser() {
     id: `usr-${randomUUID()}`,
     username: defaultUsername,
     passwordHash,
+    apiToken: createApiToken(),
     role: "admin",
     mustChangePassword: 1,
   });
@@ -127,6 +148,7 @@ export async function createUser(username: string, password: string, role: Exclu
     id: `usr-${randomUUID()}`,
     username,
     passwordHash,
+    apiToken: createApiToken(),
     role,
     mustChangePassword: 0,
   });
@@ -152,6 +174,11 @@ export function getUserByUsername(username: string) {
   return row ? mapUser(row) : null;
 }
 
+export function getUserByApiToken(apiToken: string) {
+  const row = getUserByApiTokenQuery.get({ apiToken }) as UserRow | null;
+  return row ? mapUser(row) : null;
+}
+
 export function getUserPasswordHash(userId: string) {
   const row = getUserByIdQuery.get({ id: userId }) as UserRow | null;
   return row?.password_hash ?? null;
@@ -172,6 +199,11 @@ export async function updateUserPassword(userId: string, password: string) {
   return row ? mapUser(row) : null;
 }
 
+export function regenerateUserApiToken(userId: string) {
+  updateApiTokenQuery.run({ id: userId, apiToken: createApiToken() });
+  return getUserById(userId);
+}
+
 export function createSession(userId: string) {
   deleteExpiredSessionsQuery.run({});
   const id = `ses-${randomUUID()}`;
@@ -185,6 +217,7 @@ export function getSessionUser(sessionId: string) {
     ? {
         id: row.user_id,
         username: row.username,
+        apiToken: row.api_token,
         role: row.role,
         enabled: Boolean(row.enabled),
         mustChangePassword: Boolean(row.must_change_password),
@@ -200,6 +233,7 @@ function mapUser(row: UserRow): AuthUser {
   return {
     id: row.id,
     username: row.username,
+    apiToken: row.api_token,
     role: row.role,
     enabled: Boolean(row.enabled),
     mustChangePassword: Boolean(row.must_change_password),
