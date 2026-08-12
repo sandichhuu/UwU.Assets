@@ -22,10 +22,19 @@ import {
   type AssetKind,
   type LocalizationKind,
 } from "./db/assets";
+import {
+  createSession,
+  deleteSession,
+  ensureDefaultAdminUser,
+  getSessionUser,
+  updateUserPassword,
+  verifyUserPassword,
+} from "./db/auth";
 import { getDatabasePath } from "./db/database";
 import { ensureSeedData } from "./db/seed";
 
 ensureSeedData();
+await ensureDefaultAdminUser();
 
 const assetKinds = new Set<AssetKind>(["Image", "Audio", "Video"]);
 const localizationKinds = new Set<LocalizationKind>(["audioLocalization", "textLocalization"]);
@@ -89,6 +98,40 @@ function diskStorage() {
     availableBytes: stats.bavail * stats.bsize,
     totalBytes: stats.blocks * stats.bsize,
   };
+}
+
+function parseCookies(req: Request) {
+  return Object.fromEntries(
+    (req.headers.get("cookie") ?? "")
+      .split(";")
+      .map(cookie => cookie.trim())
+      .filter(Boolean)
+      .map(cookie => {
+        const [name, ...value] = cookie.split("=");
+        return [name, decodeURIComponent(value.join("="))];
+      }),
+  );
+}
+
+function sessionCookie(sessionId: string, maxAgeSeconds = 60 * 60 * 24 * 7) {
+  const secure = Bun.env.NODE_ENV === "production" ? "; Secure" : "";
+  return `uwu_session=${encodeURIComponent(sessionId)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}${secure}`;
+}
+
+function clearSessionCookie() {
+  return sessionCookie("", 0);
+}
+
+function currentUser(req: Request) {
+  const sessionId = parseCookies(req).uwu_session;
+  return sessionId ? getSessionUser(sessionId) : null;
+}
+
+function passwordChangeError(req: Request) {
+  const user = currentUser(req);
+  if (!user) return Response.json({ error: "Login required" }, { status: 401 });
+  if (user.mustChangePassword) return Response.json({ error: "Password change required" }, { status: 403 });
+  return null;
 }
 
 async function convertWithFfmpeg(content: Buffer, sourceName: string, outputExtension: string, args: string[], errorMessage: string) {
@@ -256,17 +299,84 @@ const server = serve({
       });
     },
 
+    "/api/auth/me": {
+      async GET(req) {
+        const user = currentUser(req);
+        return Response.json({ user });
+      },
+    },
+
+    "/api/auth/login": {
+      async POST(req) {
+        const body = (await req.json()) as { username?: string; password?: string };
+        const username = body.username?.trim() ?? "";
+        const password = body.password ?? "";
+        const user = await verifyUserPassword(username, password);
+        if (!user) return Response.json({ error: "Invalid username or password" }, { status: 401 });
+
+        const sessionId = createSession(user.id);
+        return Response.json(
+          { user },
+          {
+            headers: {
+              "Set-Cookie": sessionCookie(sessionId),
+            },
+          },
+        );
+      },
+    },
+
+    "/api/auth/password": {
+      async PUT(req) {
+        const user = currentUser(req);
+        if (!user) return Response.json({ error: "Login required" }, { status: 401 });
+
+        const body = (await req.json()) as { currentPassword?: string; newPassword?: string };
+        const currentPassword = body.currentPassword ?? "";
+        const newPassword = body.newPassword ?? "";
+        if (newPassword.length < 8) return Response.json({ error: "New password must be at least 8 characters" }, { status: 400 });
+        if (newPassword === "admin") return Response.json({ error: "New password cannot be the default password" }, { status: 400 });
+
+        const verifiedUser = await verifyUserPassword(user.username, currentPassword);
+        if (!verifiedUser) return Response.json({ error: "Current password is incorrect" }, { status: 401 });
+
+        const updatedUser = await updateUserPassword(user.id, newPassword);
+        return Response.json({ user: updatedUser });
+      },
+    },
+
+    "/api/auth/logout": {
+      async POST(req) {
+        const sessionId = parseCookies(req).uwu_session;
+        if (sessionId) deleteSession(sessionId);
+        return Response.json(
+          { ok: true },
+          {
+            headers: {
+              "Set-Cookie": clearSessionCookie(),
+            },
+          },
+        );
+      },
+    },
+
     "/api/storage-usage": {
-      async GET() {
+      async GET(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         return Response.json({ bytes: storageUsageBytes(), disk: diskStorage() });
       },
     },
 
     "/api/projects": {
-      async GET() {
+      async GET(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         return Response.json({ projects: listProjects() });
       },
       async POST(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const body = (await req.json()) as { name?: string };
         const name = body.name?.trim();
 
@@ -282,6 +392,8 @@ const server = serve({
 
     "/api/projects/:projectId": {
       async GET(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
         const page = { limit: defaultAssetPageSize, offset: 0 };
@@ -299,12 +411,16 @@ const server = serve({
         });
       },
       async DELETE(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         return Response.json({ deleted: deleteProject(req.params.projectId) });
       },
     },
 
     "/api/projects/:projectId/assets": {
       async GET(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
@@ -316,6 +432,8 @@ const server = serve({
         return Response.json({ assets: listAssets(project.id, kind ?? undefined, assetPageParams(req)) });
       },
       async POST(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
@@ -376,6 +494,8 @@ const server = serve({
 
     "/api/assets/:assetId": {
       async DELETE(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const asset = getAssetById(req.params.assetId);
         const deleted = deleteAsset(req.params.assetId);
         if (deleted && asset) {
@@ -404,6 +524,8 @@ const server = serve({
 
     "/api/projects/:projectId/localization/:kind": {
       async GET(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
@@ -413,6 +535,8 @@ const server = serve({
         return Response.json({ rows: listLocalization(project.id, kind) });
       },
       async POST(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
@@ -437,18 +561,24 @@ const server = serve({
 
     "/api/localization/:localizationId": {
       async DELETE(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         return Response.json({ deleted: deleteLocalization(req.params.localizationId) });
       },
     },
 
     "/api/projects/:projectId/settings": {
       async GET(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
         return Response.json({ settings: getProjectSettings(project.id) });
       },
       async PUT(req) {
+        const unauthorized = passwordChangeError(req);
+        if (unauthorized) return unauthorized;
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 

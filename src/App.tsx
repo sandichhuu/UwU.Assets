@@ -9,6 +9,7 @@ import {
   FolderPlus,
   Globe2,
   Link2,
+  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
@@ -20,7 +21,7 @@ import {
   Upload,
   WandSparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -78,6 +79,12 @@ type StorageUsage = {
     availableBytes: number;
     totalBytes: number;
   };
+};
+
+type AuthUser = {
+  id: string;
+  username: string;
+  mustChangePassword: boolean;
 };
 
 const assetPageSize = 50;
@@ -238,6 +245,7 @@ async function generateImagePreview(file: File, normalizedName: string) {
 }
 
 export function App() {
+  const [authUser, setAuthUser] = useState<AuthUser | null | undefined>(undefined);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState(() => localStorage.getItem(selectedProjectStorageKey) ?? "");
   const [activeTab, setActiveTab] = useState<Tab>(() => {
@@ -272,6 +280,22 @@ export function App() {
     () => projects.reduce((sum, project) => sum + project.assets.Image.length + project.assets.Audio.length + project.assets.Video.length, 0),
     [projects],
   );
+
+  const loadCurrentUser = async () => {
+    const response = await fetch("/api/auth/me");
+    if (!response.ok) throw new Error("Could not check login session");
+    const data = (await response.json()) as { user: AuthUser | null };
+    setAuthUser(data.user);
+    return data.user;
+  };
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setAuthUser(null);
+    setProjects([]);
+    setActiveProjectId("");
+    showToast.success("Signed out");
+  };
 
   const loadProject = async (projectId: string) => {
     const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
@@ -314,8 +338,17 @@ export function App() {
   };
 
   useEffect(() => {
-    loadProjects().catch(error => showToast.error(String(error)));
+    loadCurrentUser().catch(error => {
+      setAuthUser(null);
+      showToast.error(String(error));
+    });
   }, []);
+
+  useEffect(() => {
+    if (authUser && !authUser.mustChangePassword) {
+      loadProjects().catch(error => showToast.error(String(error)));
+    }
+  }, [authUser?.id, authUser?.mustChangePassword]);
 
   useEffect(() => {
     if (activeProjectId) localStorage.setItem(selectedProjectStorageKey, activeProjectId);
@@ -327,16 +360,25 @@ export function App() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeProjectId) loadProject(activeProjectId).catch(error => showToast.error(String(error)));
-  }, [activeProjectId]);
+    if (authUser && !authUser.mustChangePassword && activeProjectId) {
+      loadProject(activeProjectId).catch(error => showToast.error(String(error)));
+    }
+  }, [activeProjectId, authUser?.id, authUser?.mustChangePassword]);
 
   useEffect(() => {
-    if (!activeProject || !activeProject.assets.Video.some(asset => asset.conversionStatus === "queued" || asset.conversionStatus === "processing")) return;
+    if (
+      !authUser ||
+      authUser.mustChangePassword ||
+      !activeProject ||
+      !activeProject.assets.Video.some(asset => asset.conversionStatus === "queued" || asset.conversionStatus === "processing")
+    ) {
+      return;
+    }
     const timer = window.setInterval(() => {
       loadProject(activeProject.id).catch(error => showToast.error(String(error)));
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [activeProject]);
+  }, [activeProject, authUser?.id, authUser?.mustChangePassword]);
 
   const loadMoreAssets = async (kind: AssetKind) => {
     if (!activeProject || isLoadingMoreAssets || !assetHasMore[kind]) return;
@@ -619,6 +661,30 @@ export function App() {
     void saveSettings(token, value);
   };
 
+  if (authUser === undefined) {
+    return (
+      <main className="auth-screen">
+        <div className="auth-card">
+          <div className="brand-mark">UwU</div>
+          <h1>Loading account</h1>
+        </div>
+        <Toaster position="top-right" richColors closeButton />
+      </main>
+    );
+  }
+
+  if (!authUser || authUser.mustChangePassword) {
+    return (
+      <AuthPage
+        user={authUser}
+        onAuthenticated={user => {
+          setAuthUser(user);
+          if (!user.mustChangePassword) showToast.success(`Welcome, ${user.username}`);
+        }}
+      />
+    );
+  }
+
   if (!activeProject) {
     return (
       <main className="asset-app">
@@ -690,7 +756,10 @@ export function App() {
       </Button>
 
       <section className="workspace">
-        <header className="topbar"><div className="title-cluster"><div><span className="eyebrow">Project</span><h1>{activeProject.name}</h1></div></div></header>
+        <header className="topbar">
+          <div className="title-cluster"><div><span className="eyebrow">Project</span><h1>{activeProject.name}</h1></div></div>
+          <Button variant="outline" onClick={() => void logout()}><LogOut />Logout</Button>
+        </header>
         <section className="metric-row" aria-label="Project summary">
           <Card><strong>{totalAssets}</strong><span>Total assets</span></Card>
           <Card><strong>{tabAssetCount}</strong><span>Rows in view</span></Card>
@@ -748,6 +817,92 @@ export function App() {
           }}
         />
       )}
+      <Toaster position="top-right" richColors closeButton />
+    </main>
+  );
+}
+
+function AuthPage({ user, onAuthenticated }: { user: AuthUser | null; onAuthenticated: (user: AuthUser) => void }) {
+  const requiresPasswordChange = Boolean(user?.mustChangePassword);
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const submitLogin = async () => {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? "Could not log in");
+    onAuthenticated(data.user);
+    if (data.user.mustChangePassword) {
+      setCurrentPassword(password);
+      setPassword("");
+      showToast.info("Update the default password before entering the console");
+    }
+  };
+
+  const submitPasswordChange = async () => {
+    if (newPassword !== confirmPassword) throw new Error("New passwords do not match");
+    const response = await fetch("/api/auth/password", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? "Could not update password");
+    onAuthenticated(data.user);
+    showToast.success("Password updated");
+  };
+
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+    try {
+      if (requiresPasswordChange) await submitPasswordChange();
+      else await submitLogin();
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="auth-screen">
+      <form className="auth-card" onSubmit={onSubmit}>
+        <div className="auth-brand-row">
+          <div className="brand-mark">UwU</div>
+          <div>
+            <p>Asset Console</p>
+            <span>{requiresPasswordChange ? "First login password update" : "Account login"}</span>
+          </div>
+        </div>
+        <div>
+          <h1>{requiresPasswordChange ? "Update password" : "Login"}</h1>
+          <p className="auth-copy">
+            {requiresPasswordChange ? "The default admin password must be changed before the dashboard opens." : "Use the admin account to manage projects and assets."}
+          </p>
+        </div>
+        {requiresPasswordChange ? (
+          <>
+            <label>Current password<Input autoFocus type="password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} /></label>
+            <label>New password<Input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} minLength={8} /></label>
+            <label>Confirm password<Input type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} minLength={8} /></label>
+          </>
+        ) : (
+          <>
+            <label>Username<Input autoFocus value={username} onChange={event => setUsername(event.target.value)} /></label>
+            <label>Password<Input type="password" value={password} onChange={event => setPassword(event.target.value)} /></label>
+          </>
+        )}
+        <Button type="submit" disabled={isSubmitting}>{isSubmitting ? "Working..." : requiresPasswordChange ? "Update password" : "Login"}</Button>
+      </form>
       <Toaster position="top-right" richColors closeButton />
     </main>
   );

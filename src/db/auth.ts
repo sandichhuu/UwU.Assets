@@ -1,0 +1,143 @@
+import { randomUUID } from "node:crypto";
+import { getDatabase } from "./database";
+
+export type AuthUser = {
+  id: string;
+  username: string;
+  mustChangePassword: boolean;
+};
+
+type UserRow = {
+  id: string;
+  username: string;
+  password_hash: string;
+  must_change_password: number;
+};
+
+type SessionRow = {
+  session_id: string;
+  user_id: string;
+  username: string;
+  must_change_password: number;
+};
+
+const db = getDatabase();
+const sessionDays = 7;
+const defaultUsername = "admin";
+const defaultPassword = "admin";
+
+const getUserByUsernameQuery = db.query(`
+  SELECT id, username, password_hash, must_change_password
+  FROM users
+  WHERE username = $username
+`);
+
+const getUserByIdQuery = db.query(`
+  SELECT id, username, password_hash, must_change_password
+  FROM users
+  WHERE id = $id
+`);
+
+const insertUserQuery = db.query(`
+  INSERT INTO users (id, username, password_hash, must_change_password)
+  VALUES ($id, $username, $passwordHash, $mustChangePassword)
+`);
+
+const updatePasswordQuery = db.query(`
+  UPDATE users
+  SET password_hash = $passwordHash,
+      must_change_password = 0,
+      updated_at = datetime('now')
+  WHERE id = $id
+`);
+
+const insertSessionQuery = db.query(`
+  INSERT INTO sessions (id, user_id, expires_at)
+  VALUES ($id, $userId, datetime('now', '+${sessionDays} days'))
+`);
+
+const getSessionQuery = db.query(`
+  SELECT sessions.id AS session_id, users.id AS user_id, users.username, users.must_change_password
+  FROM sessions
+  JOIN users ON users.id = sessions.user_id
+  WHERE sessions.id = $sessionId
+    AND sessions.expires_at > datetime('now')
+`);
+
+const deleteSessionQuery = db.query(`
+  DELETE FROM sessions
+  WHERE id = $sessionId
+`);
+
+const deleteExpiredSessionsQuery = db.query(`
+  DELETE FROM sessions
+  WHERE expires_at <= datetime('now')
+`);
+
+export async function ensureDefaultAdminUser() {
+  const existing = getUserByUsername(defaultUsername);
+  if (existing) return existing;
+
+  const passwordHash = await Bun.password.hash(defaultPassword);
+  insertUserQuery.run({
+    id: `usr-${randomUUID()}`,
+    username: defaultUsername,
+    passwordHash,
+    mustChangePassword: 1,
+  });
+  return getUserByUsername(defaultUsername);
+}
+
+export function getUserByUsername(username: string) {
+  const row = getUserByUsernameQuery.get({ username }) as UserRow | null;
+  return row ? mapUser(row) : null;
+}
+
+export function getUserPasswordHash(userId: string) {
+  const row = getUserByIdQuery.get({ id: userId }) as UserRow | null;
+  return row?.password_hash ?? null;
+}
+
+export async function verifyUserPassword(username: string, password: string) {
+  const row = getUserByUsernameQuery.get({ username }) as UserRow | null;
+  if (!row) return null;
+  const valid = await Bun.password.verify(password, row.password_hash);
+  return valid ? mapUser(row) : null;
+}
+
+export async function updateUserPassword(userId: string, password: string) {
+  const passwordHash = await Bun.password.hash(password);
+  updatePasswordQuery.run({ id: userId, passwordHash });
+  const row = getUserByIdQuery.get({ id: userId }) as UserRow | null;
+  return row ? mapUser(row) : null;
+}
+
+export function createSession(userId: string) {
+  deleteExpiredSessionsQuery.run({});
+  const id = `ses-${randomUUID()}`;
+  insertSessionQuery.run({ id, userId });
+  return id;
+}
+
+export function getSessionUser(sessionId: string) {
+  const row = getSessionQuery.get({ sessionId }) as SessionRow | null;
+  return row
+    ? {
+        id: row.user_id,
+        username: row.username,
+        mustChangePassword: Boolean(row.must_change_password),
+      }
+    : null;
+}
+
+export function deleteSession(sessionId: string) {
+  return deleteSessionQuery.run({ sessionId }).changes > 0;
+}
+
+function mapUser(row: UserRow): AuthUser {
+  return {
+    id: row.id,
+    username: row.username,
+    mustChangePassword: Boolean(row.must_change_password),
+  };
+}
