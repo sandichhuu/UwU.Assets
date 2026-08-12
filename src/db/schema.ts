@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS assets (
   size_bytes INTEGER NOT NULL DEFAULT 0,
   mime_type TEXT NOT NULL DEFAULT '',
   metadata_json TEXT NOT NULL DEFAULT '[]',
+  conversion_status TEXT NOT NULL DEFAULT 'ready',
+  conversion_progress INTEGER NOT NULL DEFAULT 100,
+  conversion_error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

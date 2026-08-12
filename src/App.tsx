@@ -40,6 +40,9 @@ type Asset = {
   sizeBytes: number;
   mimeType: string;
   metadata: string[];
+  conversionStatus: "queued" | "processing" | "ready" | "failed";
+  conversionProgress: number;
+  conversionError: string;
   updatedAt: string;
 };
 
@@ -123,6 +126,9 @@ function mapAssetPayload(asset: any): Asset {
     sizeBytes: asset.sizeBytes,
     mimeType: asset.mimeType,
     metadata: asset.metadata ?? [],
+    conversionStatus: asset.conversionStatus ?? "ready",
+    conversionProgress: asset.conversionProgress ?? 100,
+    conversionError: asset.conversionError ?? "",
     updatedAt: asset.updatedAt,
   };
 }
@@ -323,6 +329,14 @@ export function App() {
   useEffect(() => {
     if (activeProjectId) loadProject(activeProjectId).catch(error => showToast.error(String(error)));
   }, [activeProjectId]);
+
+  useEffect(() => {
+    if (!activeProject || !activeProject.assets.Video.some(asset => asset.conversionStatus === "queued" || asset.conversionStatus === "processing")) return;
+    const timer = window.setInterval(() => {
+      loadProject(activeProject.id).catch(error => showToast.error(String(error)));
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [activeProject]);
 
   const loadMoreAssets = async (kind: AssetKind) => {
     if (!activeProject || isLoadingMoreAssets || !assetHasMore[kind]) return;
@@ -805,6 +819,7 @@ function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCop
   const [playingAssetId, setPlayingAssetId] = useState<string | null>(null);
   const isImageTable = assetKind === "Image";
   const isAudioTable = assetKind === "Audio";
+  const isVideoTable = assetKind === "Video";
 
   useEffect(() => {
     const element = loadMoreRef.current;
@@ -847,9 +862,9 @@ function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCop
       <div className="table-toolbar"><div><h2>{assetKind} assets</h2><p>Rows are fetched from the SQLite assets table for the selected project.</p></div><div className="table-actions"><input ref={fileInputRef} type="file" multiple className="hidden" accept={assetKind === "Image" ? imageUploadAccept : assetKind === "Video" ? "video/*" : "audio/*"} onChange={event => onUpload(event.currentTarget.files)} /><Button onClick={() => fileInputRef.current?.click()}><Upload />Add asset</Button></div></div>
       <div className="data-table">
         {isAudioTable && <audio ref={audioRef} className="hidden" onEnded={() => setPlayingAssetId(null)} />}
-        <div className={isImageTable ? "asset-row image-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span>{isImageTable && <span>Preview</span>}<span>Metadata</span><span>Tools</span></div>
+        <div className={isImageTable ? "asset-row image-asset-row table-head" : isVideoTable ? "asset-row video-asset-row table-head" : "asset-row table-head"}><span>No.</span><span>Name</span>{isImageTable && <span>Preview</span>}{isVideoTable && <span>Status</span>}<span>Metadata</span><span>Tools</span></div>
         {assets.map((asset, index) => (
-          <div className={isImageTable ? "asset-row image-asset-row" : "asset-row"} key={asset.id}>
+          <div className={isImageTable ? "asset-row image-asset-row" : isVideoTable ? "asset-row video-asset-row" : "asset-row"} key={asset.id}>
             <span className="row-no">{assets.length - index}</span>
             <div className={isAudioTable ? "asset-name-cell audio-name-cell" : "asset-name-cell"}>
               {isAudioTable && (
@@ -864,11 +879,12 @@ function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCop
                 <img src={previewUrl(asset)} alt={asset.originalName} loading="lazy" />
               </button>
             )}
+            {isVideoTable && <ConversionStatus asset={asset} />}
             <div className="metadata-list">{asset.metadata.map(item => <span key={item}>{item}</span>)}<span>{formatBytes(asset.sizeBytes)}</span><span>{asset.updatedAt.slice(0, 10)}</span></div>
             <div className="toolset">
-              <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "id")} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
-              <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "name")} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
-              <Button variant="outline" size="icon-sm" onClick={() => onDownload(asset)} title="Download" aria-label="Download"><Download /></Button>
+              <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "id")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
+              <Button variant="outline" size="icon-sm" onClick={() => onCopy(asset, "name")} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
+              <Button variant="outline" size="icon-sm" onClick={() => onDownload(asset)} disabled={isVideoTable && asset.conversionStatus !== "ready"} title="Download" aria-label="Download"><Download /></Button>
               <Button variant="destructive" size="icon-sm" onClick={() => onRemove(asset)} title="Remove" aria-label="Remove"><Trash2 /></Button>
             </div>
           </div>
@@ -881,6 +897,25 @@ function AssetTable({ assets, assetKind, audioUrl, hasMore, isLoadingMore, onCop
         )}
       </div>
     </Card>
+  );
+}
+
+function ConversionStatus({ asset }: { asset: Asset }) {
+  const label =
+    asset.conversionStatus === "ready"
+      ? "Ready"
+      : asset.conversionStatus === "failed"
+        ? "Failed"
+        : asset.conversionStatus === "queued"
+          ? "Queued"
+          : "Converting";
+  const progress = asset.conversionStatus === "ready" ? 100 : asset.conversionProgress;
+
+  return (
+    <div className={`conversion-status is-${asset.conversionStatus}`} title={asset.conversionError || label}>
+      <div><strong>{label}</strong><span>{progress}%</span></div>
+      <div className="conversion-progress-track" aria-hidden="true"><div style={{ width: `${progress}%` }} /></div>
+    </div>
   );
 }
 

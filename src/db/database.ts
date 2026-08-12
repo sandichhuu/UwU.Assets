@@ -33,8 +33,24 @@ export function getDatabase() {
   database.run("PRAGMA foreign_keys = ON;");
   database.run("PRAGMA journal_mode = WAL;");
   database.run(schema);
+  ensureAssetConversionColumns(database);
 
   return database;
+}
+
+function ensureAssetConversionColumns(db: Database) {
+  const columns = db.query("PRAGMA table_info(assets)").all() as Array<{ name: string }>;
+  const names = new Set(columns.map(column => column.name));
+
+  if (!names.has("conversion_status")) {
+    db.run("ALTER TABLE assets ADD COLUMN conversion_status TEXT NOT NULL DEFAULT 'ready';");
+  }
+  if (!names.has("conversion_progress")) {
+    db.run("ALTER TABLE assets ADD COLUMN conversion_progress INTEGER NOT NULL DEFAULT 100;");
+  }
+  if (!names.has("conversion_error")) {
+    db.run("ALTER TABLE assets ADD COLUMN conversion_error TEXT NOT NULL DEFAULT '';");
+  }
 }
 
 export function isFirstDatabaseLaunch() {

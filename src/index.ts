@@ -16,6 +16,7 @@ import {
   listAssets,
   listLocalization,
   listProjects,
+  updateAssetConversion,
   upsertLocalization,
   upsertProjectSettings,
   type AssetKind,
@@ -53,6 +54,10 @@ function oggAssetName(name: string) {
 
 function webmAssetName(name: string) {
   return name.replace(/\.[^.]*$/, "") + ".webm";
+}
+
+function sourceVideoAssetName(name: string) {
+  return `${name}.source`;
 }
 
 function isSafeAssetName(name: string) {
@@ -123,6 +128,59 @@ async function convertVideoToWebm(content: Buffer, sourceName: string) {
   );
 }
 
+async function convertStoredVideoInBackground(assetId: string, sourcePath: string, outputPath: string) {
+  updateAssetConversion(assetId, "processing", 1);
+
+  try {
+    const process = Bun.spawn(
+      ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", sourcePath, "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-c:a", "libopus", "-progress", "pipe:1", outputPath],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const reader = process.stdout.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let durationUs = 0;
+
+    const probe = Bun.spawn(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", sourcePath], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [probeExit, probeText] = await Promise.all([probe.exited, new Response(probe.stdout).text()]);
+    if (probeExit === 0) {
+      const durationSeconds = Number(probeText.trim());
+      durationUs = Number.isFinite(durationSeconds) ? durationSeconds * 1_000_000 : 0;
+    }
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const [key, rawValue] = line.split("=", 2);
+          if (key === "out_time_us" && durationUs > 0) {
+            const outTimeUs = Number(rawValue);
+            if (Number.isFinite(outTimeUs)) {
+              updateAssetConversion(assetId, "processing", Math.min(99, (outTimeUs / durationUs) * 100));
+            }
+          }
+        }
+      }
+      if (done) break;
+    }
+
+    const [exitCode, stderr] = await Promise.all([process.exited, new Response(process.stderr).text()]);
+    if (exitCode !== 0) throw new Error(stderr.trim() || "ffmpeg could not convert video to WebM");
+
+    updateAssetConversion(assetId, "ready", 100, "", fileSize(outputPath));
+  } catch (error) {
+    updateAssetConversion(assetId, "failed", 100, error instanceof Error ? error.message : String(error));
+  } finally {
+    if (existsSync(sourcePath)) unlinkSync(sourcePath);
+  }
+}
+
 function assetPageParams(req: Request) {
   const params = new URL(req.url).searchParams;
   const parsedLimit = Number(params.get("limit"));
@@ -143,6 +201,19 @@ async function assetResponse(req: Request, mode: "id" | "name", key: string) {
   }
 
   const shouldServePreview = new URL(req.url).searchParams.get("preview") === "1";
+  if (asset.kind === "Video" && asset.conversionStatus !== "ready") {
+    console.warn(`Video asset ${asset.id} is not ready: ${asset.conversionStatus} ${asset.conversionProgress}%`);
+    return Response.json(
+      {
+        error: "Video not ready yet",
+        assetId: asset.id,
+        status: asset.conversionStatus,
+        progress: asset.conversionProgress,
+        trace: asset.conversionError,
+      },
+      { status: 409 },
+    );
+  }
   const file = Bun.file(shouldServePreview ? assetPreviewFilePath(asset.name) : assetFilePath(asset.name));
   if (!(await file.exists())) {
     return Response.json({ error: "Asset file not found" }, { status: 404 });
@@ -275,14 +346,11 @@ const server = serve({
 
         mkdirSync(assetStoragePath, { recursive: true });
         const originalContent = Buffer.from(body.contentBase64, "base64");
-        const assetContent =
-          body.kind === "Audio"
-            ? await convertAudioToOgg(originalContent, body.originalName.trim())
-            : body.kind === "Video"
-              ? await convertVideoToWebm(originalContent, body.originalName.trim())
-              : originalContent;
-        const mimeType = body.kind === "Audio" ? "audio/ogg" : body.kind === "Video" ? "video/webm" : body.mimeType;
-        await Bun.write(assetFilePath(assetName), assetContent);
+        const isVideo = body.kind === "Video";
+        const assetContent = body.kind === "Audio" ? await convertAudioToOgg(originalContent, body.originalName.trim()) : originalContent;
+        const mimeType = body.kind === "Audio" ? "audio/ogg" : isVideo ? "video/webm" : body.mimeType;
+        const writePath = isVideo ? assetFilePath(sourceVideoAssetName(assetName)) : assetFilePath(assetName);
+        await Bun.write(writePath, assetContent);
         if (body.previewContentBase64) {
           await Bun.write(assetPreviewFilePath(assetName), Buffer.from(body.previewContentBase64, "base64"));
         }
@@ -294,7 +362,13 @@ const server = serve({
           sizeBytes: assetContent.byteLength,
           mimeType,
           metadata: body.metadata,
+          conversionStatus: isVideo ? "queued" : "ready",
+          conversionProgress: isVideo ? 0 : 100,
         });
+
+        if (isVideo) {
+          void convertStoredVideoInBackground(asset.id, writePath, assetFilePath(assetName));
+        }
 
         return Response.json({ asset }, { status: 201 });
       },
@@ -307,6 +381,8 @@ const server = serve({
         if (deleted && asset) {
           const path = assetFilePath(asset.name);
           if (existsSync(path)) unlinkSync(path);
+          const sourcePath = assetFilePath(sourceVideoAssetName(asset.name));
+          if (existsSync(sourcePath)) unlinkSync(sourcePath);
           const previewPath = assetPreviewFilePath(asset.name);
           if (existsSync(previewPath)) unlinkSync(previewPath);
         }
