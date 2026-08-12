@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/index.ts",
-    "start": "bun src/server.ts",
-    "build": "bun run build.ts"
+    "start": "bun --cwd dist index.js",
+    "build": "bun run build.ts",
+    "preview": "bun src/server.ts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.7",

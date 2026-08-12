@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { schema } from "./schema";
 
@@ -22,13 +22,30 @@ export function getDatabase() {
   }
 
   resolvedDatabasePath = resolve(databasePath);
+  const databaseDirectory = dirname(resolvedDatabasePath);
   databaseFileExistedBeforeOpen = existsSync(resolvedDatabasePath);
-  mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
+  mkdirSync(databaseDirectory, { recursive: true });
 
-  database = new Database(resolvedDatabasePath, {
-    create: true,
-    strict: true,
-  });
+  try {
+    accessSync(databaseDirectory, constants.W_OK);
+  } catch (cause) {
+    throw new Error(
+      `${databasePathEnvName} directory is not writable: ${databaseDirectory}. ` +
+        "If this runs in Docker with a bind mount, make the host directory writable by the container user or use the named volume from docker-compose.yaml.",
+      { cause },
+    );
+  }
+
+  try {
+    database = new Database(resolvedDatabasePath, {
+      create: true,
+      strict: true,
+    });
+  } catch (cause) {
+    throw new Error(`Could not open SQLite database at ${resolvedDatabasePath}. Check file and directory permissions.`, {
+      cause,
+    });
+  }
 
   database.run("PRAGMA foreign_keys = ON;");
   database.run("PRAGMA journal_mode = WAL;");

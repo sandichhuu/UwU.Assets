@@ -17,8 +17,8 @@ RUN bun run build
 
 FROM base AS release
 COPY --from=prerelease /app/dist ./dist
-COPY --from=prerelease /app/src/server.ts ./src/server.ts
 COPY --from=prerelease /app/package.json .
+RUN mkdir -p /app/data && chown -R bun:bun /app/data
 
 USER bun
 EXPOSE 3000/tcp

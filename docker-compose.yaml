@@ -14,7 +14,7 @@ services:
       SQLITE_DATABASE_PATH: /app/data/uwu-assets.sqlite
       ASSET_STORAGE_PATH: /app/data/assets
     volumes:
-      - ./data:/app/data
+      - uwu-assets-data:/app/data
     healthcheck:
       test:
         [
@@ -27,3 +27,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  uwu-assets-data:

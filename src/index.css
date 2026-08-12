@@ -238,6 +238,7 @@
 }
 
 .topbar {
+  flex: 0 0 auto;
   min-height: 46px;
 }
 
@@ -302,6 +303,7 @@ h2 {
 }
 
 .metric-row {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
@@ -327,6 +329,7 @@ h2 {
 }
 
 .tabbar {
+  flex: 0 0 auto;
   display: flex;
   gap: 8px;
   border-bottom: 1px solid hsl(207 60% 90%);
@@ -371,6 +374,10 @@ h2 {
 }
 
 .tab-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   animation: tab-panel-enter 220ms ease-out;
   will-change: opacity, transform;
 }
@@ -388,6 +395,10 @@ h2 {
 }
 
 .table-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -398,6 +409,7 @@ h2 {
 }
 
 .table-toolbar {
+  flex: 0 0 auto;
   padding: 18px;
   border-bottom: 1px solid hsl(207 60% 92%);
   background: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(207 100% 98%) 100%);
@@ -410,7 +422,9 @@ h2 {
 .data-table,
 .localization-table,
 .audit-table {
-  overflow-x: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .asset-row {

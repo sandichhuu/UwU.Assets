@@ -302,11 +302,8 @@ async function assetResponse(req: Request, mode: "id" | "name", key: string) {
 }
 
 const server = serve({
-  port: Bun.env.PORT ? Number(Bun.env.PORT) : undefined,
+  port: Bun.env.PORT ? Number(Bun.env.PORT) : 3000,
   routes: {
-    // Serve index.html for all unmatched routes.
-    "/*": index,
-
     "/api/hello": {
       async GET(req) {
         return Response.json({
@@ -797,6 +794,9 @@ const server = serve({
         return Response.json({ settings });
       },
     },
+
+    // Serve index.html for all unmatched routes.
+    "/*": index,
   },
 
   development: process.env.NODE_ENV !== "production" && {
