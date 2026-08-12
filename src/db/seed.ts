@@ -1,8 +1,13 @@
 import { createAsset, createProject, listAssets, listLocalization, listProjects, upsertLocalization } from "./assets";
+import { isFirstDatabaseLaunch } from "./database";
 
 export function ensureSeedData() {
+  if (!isFirstDatabaseLaunch()) {
+    return listProjects()[0] ?? null;
+  }
+
   const [existingProject] = listProjects();
-  const project = existingProject ?? createProject("Aurora Launch");
+  const project = existingProject ?? createProject("Project Name");
   ensureProjectSampleData(project.id);
 
   return project;

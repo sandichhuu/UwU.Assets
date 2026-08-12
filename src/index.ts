@@ -16,7 +16,7 @@ import {
   type AssetKind,
   type LocalizationKind,
 } from "./db/assets";
-import { ensureProjectSampleData, ensureSeedData } from "./db/seed";
+import { ensureSeedData } from "./db/seed";
 
 ensureSeedData();
 
@@ -63,7 +63,6 @@ const server = serve({
         }
 
         const project = createProject(name);
-        ensureProjectSampleData(project.id);
 
         return Response.json({ project }, { status: 201 });
       },
@@ -73,7 +72,6 @@ const server = serve({
       async GET(req) {
         const project = getProject(req.params.projectId);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
-        ensureProjectSampleData(project.id);
 
         return Response.json({
           project,

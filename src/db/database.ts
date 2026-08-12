@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { schema } from "./schema";
 
 const databasePathEnvName = "SQLITE_DATABASE_PATH";
 
 let database: Database | null = null;
+let databaseFileExistedBeforeOpen = false;
 
 export function getDatabase() {
   if (database) return database;
@@ -20,6 +21,7 @@ export function getDatabase() {
   }
 
   const resolvedDatabasePath = resolve(databasePath);
+  databaseFileExistedBeforeOpen = existsSync(resolvedDatabasePath);
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
   database = new Database(resolvedDatabasePath, {
@@ -34,7 +36,13 @@ export function getDatabase() {
   return database;
 }
 
+export function isFirstDatabaseLaunch() {
+  getDatabase();
+  return !databaseFileExistedBeforeOpen;
+}
+
 export function closeDatabase() {
   database?.close(true);
   database = null;
+  databaseFileExistedBeforeOpen = false;
 }

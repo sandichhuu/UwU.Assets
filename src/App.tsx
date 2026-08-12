@@ -1,4 +1,5 @@
 import {
+  ChevronDown,
   Copy,
   Download,
   FileAudio,
@@ -114,7 +115,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState<Tab>("Image");
   const [token, setToken] = useState("");
   const [gptApiToken, setGptApiToken] = useState("");
-  const [toast, setToast] = useState("Loading database data");
+  const [toast, setToast] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
   const [isDeleteProjectDialogOpen, setIsDeleteProjectDialogOpen] = useState(false);
@@ -156,8 +157,10 @@ export function App() {
     if (shells[0]) {
       setActiveProjectId(shells[0].id);
       await loadProject(shells[0].id);
+      setToast("");
+    } else {
+      setActiveProjectId("");
     }
-    setToast("Showing data from SQLite database");
   };
 
   useEffect(() => {
@@ -204,11 +207,12 @@ export function App() {
     setProjects(remaining);
     setActiveProjectId(remaining[0]?.id ?? "");
     setIsDeleteProjectDialogOpen(false);
-    setToast(`Deleted ${activeProject.name} from database`);
+    setToast(remaining.length ? `Deleted ${activeProject.name} from database` : "No projects found in SQLite database");
   };
 
-  const addUploadedFiles = async (files: FileList | null) => {
-    if (!files?.length || !activeProject || !isAssetTab(activeTab)) return;
+  const addUploadedFiles = async (files: FileList | null, uploadKind?: AssetKind) => {
+    const kind = uploadKind ?? (isAssetTab(activeTab) ? activeTab : null);
+    if (!files?.length || !activeProject || !kind) return;
     await Promise.all(
       Array.from(files).map(file =>
         fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/assets`, {
@@ -216,12 +220,12 @@ export function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             originalName: file.name,
-            name: uploadName(file.name, activeTab),
-            kind: activeTab,
+            name: uploadName(file.name, kind),
+            kind,
             sizeBytes: file.size,
             mimeType: file.type,
             metadata: [
-              activeTab === "Image" ? "converted to webp" : activeTab === "Video" ? "converted to webm" : "converted to ogg",
+              kind === "Image" ? "converted to webp" : kind === "Video" ? "converted to webm" : "converted to ogg",
               file.type || "unknown mime",
             ],
           }),
@@ -229,7 +233,7 @@ export function App() {
       ),
     );
     await loadProject(activeProject.id);
-    setToast(`Saved ${files.length} ${activeTab.toLowerCase()} asset(s) to database`);
+    setToast(`Saved ${files.length} ${kind.toLowerCase()} asset(s) to database`);
   };
 
   const removeAsset = async (asset: Asset) => {
@@ -283,6 +287,28 @@ export function App() {
     setToast("Removed localization row from database");
   };
 
+  const addLocalizationRecord = async (kind: LocalizationKind) => {
+    if (!activeProject) return;
+    const rows = activeProject[kind];
+    const prefix = kind === "audioLocalization" ? "audio.record" : "text.record";
+    const defaultValue = kind === "audioLocalization" ? "default.ogg" : "";
+    const existingKeys = new Set(rows.map(row => row.key));
+    let index = rows.length + 1;
+    let key = `${prefix}.${index}`;
+
+    while (existingKeys.has(key)) {
+      index += 1;
+      key = `${prefix}.${index}`;
+    }
+
+    await saveLocalization(kind, {
+      key,
+      values: Object.fromEntries(languages.map(language => [language, defaultValue])),
+    });
+    await loadProject(activeProject.id);
+    setToast("Added localization record to database");
+  };
+
   const aiTranslate = async (kind: LocalizationKind) => {
     if (!activeProject) return;
     const rows = activeProject[kind].map(row => {
@@ -322,9 +348,42 @@ export function App() {
   if (!activeProject) {
     return (
       <main className="asset-app">
-        <section className="workspace">
+        <aside className="project-rail">
+          <div className="brand-block">
+            <div className="brand-mark">UwU</div>
+            <div>
+              <p>Asset Console</p>
+              <p className="text-xs text-slate-300">database-backed</p>
+            </div>
+          </div>
+          <Button className="project-create" onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
+            <FolderPlus /> Project
+          </Button>
+        </aside>
+
+        <section className="workspace empty-workspace">
+          <Card className="database-empty-state">
+            <FolderPlus />
+            <div>
+              <h1>No projects yet</h1>
+              <p>The SQLite database is connected, but it does not have any project rows to display.</p>
+            </div>
+            <Button onClick={() => { setNewProjectName(""); setIsProjectDialogOpen(true); }}>
+              <FolderPlus /> Create project
+            </Button>
+          </Card>
           <div className="status-bar"><span>{toast}</span></div>
         </section>
+
+        {isProjectDialogOpen && (
+          <div className="modal-backdrop" role="presentation">
+            <form className="project-modal" onSubmit={event => { event.preventDefault(); void addProject(); }}>
+              <div><h2>New project</h2><p>Enter a project name before creating its asset tabs.</p></div>
+              <label>Project name<Input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} placeholder="Project Name" /></label>
+              <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setIsProjectDialogOpen(false)}>Cancel</Button><Button type="submit">Create project</Button></div>
+            </form>
+          </div>
+        )}
       </main>
     );
   }
@@ -374,7 +433,7 @@ export function App() {
         {activeTab === "Settings" ? (
           <SettingPanel assetToken={token} gptApiToken={gptApiToken} projectName={activeProject.name} onCopy={copyToClipboard} onDeleteProject={() => { setDeleteProjectName(""); setIsDeleteProjectDialogOpen(true); }} onGenerateToken={generateToken} onGptApiTokenChange={updateGptApiToken} />
         ) : activeLocalizationKind ? (
-          <LocalizationTable kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onUpdate={updateLocalization} onTranslate={aiTranslate} />
+          <LocalizationTable kind={activeLocalizationKind} rows={activeProject[activeLocalizationKind]} title={activeTab} token={token} onAddRecord={addLocalizationRecord} onCopy={copyToClipboard} onKeyUpdate={updateLocalizationKey} onRemove={removeLocalization} onUpdate={updateLocalization} onTranslate={aiTranslate} />
         ) : (
           <AssetTable assets={isAssetTab(activeTab) ? activeProject.assets[activeTab] : []} assetKind={isAssetTab(activeTab) ? activeTab : "Image"} onCopy={(asset, mode) => copyToClipboard(assetUrl(asset, mode), `Copied link by ${mode}: ${asset.name}`)} onDownload={asset => { location.href = assetUrl(asset, "name"); }} onUpload={addUploadedFiles} onRemove={removeAsset} />
         )}
@@ -385,7 +444,7 @@ export function App() {
         <div className="modal-backdrop" role="presentation">
           <form className="project-modal" onSubmit={event => { event.preventDefault(); void addProject(); }}>
             <div><h2>New project</h2><p>Enter a project name before creating its asset tabs.</p></div>
-            <label>Project name<Input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} placeholder="Aurora Launch" /></label>
+            <label>Project name<Input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} placeholder="Project Name" /></label>
             <div className="modal-actions"><Button type="button" variant="outline" onClick={() => setIsProjectDialogOpen(false)}>Cancel</Button><Button type="submit">Create project</Button></div>
           </form>
         </div>
@@ -413,7 +472,7 @@ function AssetTable({ assets, assetKind, onCopy, onDownload, onUpload, onRemove 
         <div className="asset-row table-head"><span>No.</span><span>Name</span><span>Metadata</span><span>Tools</span></div>
         {assets.map((asset, index) => (
           <div className="asset-row" key={asset.id}>
-            <span className="row-no">{index + 1}</span>
+            <span className="row-no">{assets.length - index}</span>
             <div><strong>{asset.name}</strong><small>{asset.originalName}</small></div>
             <div className="metadata-list">{asset.metadata.map(item => <span key={item}>{item}</span>)}<span>{formatBytes(asset.sizeBytes)}</span><span>{asset.updatedAt.slice(0, 10)}</span></div>
             <div className="toolset">
@@ -430,27 +489,51 @@ function AssetTable({ assets, assetKind, onCopy, onDownload, onUpload, onRemove 
   );
 }
 
-function LocalizationTable({ kind, rows, title, token, onCopy, onKeyUpdate, onRemove, onUpdate, onTranslate }: { kind: LocalizationKind; rows: LocalizationRow[]; title: string; token: string; onCopy: (value: string, label: string) => void; onKeyUpdate: (kind: LocalizationKind, rowIndex: number, key: string) => void; onRemove: (kind: LocalizationKind, rowIndex: number) => void; onUpdate: (kind: LocalizationKind, rowIndex: number, language: string, value: string) => void; onTranslate: (kind: LocalizationKind) => void }) {
+function LocalizationTable({ kind, rows, title, token, onAddRecord, onCopy, onKeyUpdate, onRemove, onUpdate, onTranslate }: { kind: LocalizationKind; rows: LocalizationRow[]; title: string; token: string; onAddRecord: (kind: LocalizationKind) => void; onCopy: (value: string, label: string) => void; onKeyUpdate: (kind: LocalizationKind, rowIndex: number, key: string) => void; onRemove: (kind: LocalizationKind, rowIndex: number) => void; onUpdate: (kind: LocalizationKind, rowIndex: number, language: string, value: string) => void; onTranslate: (kind: LocalizationKind) => void }) {
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(() => new Set());
   const gridTemplateColumns = "72px 220px minmax(280px, 1fr) 172px";
   return (
     <Card className="table-shell">
-      <div className="table-toolbar localization-tools"><div><h2>{title}</h2><p>Rows are fetched from the SQLite localization table.</p></div></div>
+      <div className="table-toolbar localization-tools">
+        <div><h2>{title}</h2><p>Rows are fetched from the SQLite localization table.</p></div>
+        <div className="table-actions">
+          <Button onClick={() => onAddRecord(kind)}><Plus />Add record</Button>
+        </div>
+      </div>
       <div className="localization-table">
         <div className="localization-grid table-head" style={{ gridTemplateColumns }}><span>No.</span><span>Key</span><span>Value</span><span>Tools</span></div>
-        {rows.map((row, rowIndex) => (
-          <div className="localization-row-group" key={row.id}>
-            <div className="localization-grid" style={{ gridTemplateColumns }}>
-              <span className="row-no">{rowIndex + 1}</span>
-              <Input className="key-input" value={row.key} onChange={event => onKeyUpdate(kind, rowIndex, event.target.value)} aria-label={`Localization key ${rowIndex + 1}`} />
-              <div className="localized-value"><span>EN</span><Input className="localization-value" value={row.values.en ?? ""} onChange={event => onUpdate(kind, rowIndex, "en", event.target.value)} /></div>
-              <div className="toolset localization-toolset">
-                <Button variant="outline" size="icon-sm" onClick={() => onCopy(`/localization/id/${row.key}?token=${encodeURIComponent(token)}`, `Copied localization id: ${row.key}`)} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
-                <Button variant="outline" size="icon-sm" onClick={() => onCopy(`/localization/name/${row.key.replaceAll(".", "/")}?token=${encodeURIComponent(token)}`, `Copied localization name: ${row.key}`)} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
-                <Button variant="destructive" size="icon-sm" onClick={() => onRemove(kind, rowIndex)} title="Remove" aria-label="Remove"><Trash2 /></Button>
+        {rows.map((row, rowIndex) => {
+          const rowKey = row.id ?? row.key;
+          const isExpanded = expandedRows.has(rowKey);
+          return (
+            <div className="localization-row-group" key={rowKey}>
+              <div className="localization-grid" style={{ gridTemplateColumns }}>
+                <span className="row-no">{rows.length - rowIndex}</span>
+                <Input className="key-input" value={row.key} onChange={event => onKeyUpdate(kind, rowIndex, event.target.value)} aria-label={`Localization key ${rowIndex + 1}`} />
+                <div className="localized-value"><span>EN</span><Input className="localization-value" value={row.values.en ?? ""} onChange={event => onUpdate(kind, rowIndex, "en", event.target.value)} /></div>
+                <div className="toolset localization-toolset">
+                  <Button variant="outline" size="icon-sm" onClick={() => setExpandedRows(current => {
+                    const next = new Set(current);
+                    if (next.has(rowKey)) next.delete(rowKey);
+                    else next.add(rowKey);
+                    return next;
+                  })} title={isExpanded ? "Hide languages" : "Show languages"} aria-label={isExpanded ? "Hide languages" : "Show languages"}><ChevronDown className={isExpanded ? "rotate-icon" : undefined} /></Button>
+                  <Button variant="outline" size="icon-sm" onClick={() => onCopy(`/localization/id/${row.key}?token=${encodeURIComponent(token)}`, `Copied localization id: ${row.key}`)} title="Copy Link By Id" aria-label="Copy Link By Id"><Copy /></Button>
+                  <Button variant="outline" size="icon-sm" onClick={() => onCopy(`/localization/name/${row.key.replaceAll(".", "/")}?token=${encodeURIComponent(token)}`, `Copied localization name: ${row.key}`)} title="Copy Link By Name" aria-label="Copy Link By Name"><Link2 /></Button>
+                  <Button variant="destructive" size="icon-sm" onClick={() => onRemove(kind, rowIndex)} title="Remove" aria-label="Remove"><Trash2 /></Button>
+                </div>
               </div>
+              {isExpanded && secondaryLanguages.map(language => (
+                <div className="localization-grid localization-secondary-row" style={{ gridTemplateColumns }} key={language}>
+                  <span />
+                  <span />
+                  <div className="localized-value"><span>{language.toUpperCase()}</span><Input className="localization-value" value={row.values[language] ?? ""} onChange={event => onUpdate(kind, rowIndex, language, event.target.value)} /></div>
+                  <span />
+                </div>
+              ))}
             </div>
-          </div>
-        ))}
+          );
+        })}
         {!rows.length && <div className="empty-state"><Plus /><span>No localization rows in the database for this tab yet.</span></div>}
       </div>
       {kind === "textLocalization" && <div className="bottom-actions"><Button onClick={() => onTranslate(kind)}><WandSparkles />AI Translate</Button></div>}
