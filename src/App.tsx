@@ -20,7 +20,7 @@ import {
   Upload,
   WandSparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -187,6 +187,23 @@ function loadImage(source: string) {
 
 function wait(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function startProcessingProgress(setProgress: Dispatch<SetStateAction<UploadProgress | null>>, title: string, detail: string, floor: number) {
+  const ceiling = 92;
+  const startedAt = performance.now();
+  setProgress({ title, detail, percent: floor });
+
+  const timer = window.setInterval(() => {
+    const elapsed = performance.now() - startedAt;
+    const easedPercent = floor + (ceiling - floor) * (1 - Math.exp(-elapsed / 7000));
+    setProgress(current => {
+      if (!current) return current;
+      return { ...current, title, detail, percent: Math.max(current.percent, Math.min(ceiling, Math.round(easedPercent))) };
+    });
+  }, 500);
+
+  return () => window.clearInterval(timer);
 }
 
 async function normalizeImageToWebp(file: File) {
@@ -394,25 +411,32 @@ export function App() {
         const previewFile = kind === "Image" ? await generateImagePreview(originalFile, normalizedFile.name) : null;
         completedSteps += 1;
 
-        showProgress("Uploading asset", kind === "Image" ? `${normalizedFile.name} as WebP` : originalFile.name);
-        const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/assets`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            originalName: originalFile.name,
-            name: kind === "Image" ? normalizedFile.name : uploadName(originalFile.name, kind),
-            kind,
-            sizeBytes: normalizedFile.size,
-            mimeType: normalizedFile.type,
-            contentBase64: await fileToBase64(normalizedFile),
-            previewContentBase64: previewFile ? await fileToBase64(previewFile) : undefined,
-            metadata: [
-              kind === "Image" ? "converted to webp" : kind === "Video" ? "converted to webm" : "converted to ogg",
-              originalFile.type || "unknown mime",
-            ],
-          }),
-        });
-        if (!response.ok) throw new Error(`Could not upload ${originalFile.name}`);
+        const uploadTitle = kind === "Video" ? "Converting video" : kind === "Audio" ? "Converting audio" : "Uploading asset";
+        const uploadDetail = kind === "Image" ? `${normalizedFile.name} as WebP` : originalFile.name;
+        const progressFloor = Math.min(88, Math.max(8, Math.round((completedSteps / totalSteps) * 100)));
+        const stopProcessingProgress = startProcessingProgress(setUploadProgress, uploadTitle, uploadDetail, progressFloor);
+        try {
+          const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/assets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              originalName: originalFile.name,
+              name: kind === "Image" ? normalizedFile.name : uploadName(originalFile.name, kind),
+              kind,
+              sizeBytes: normalizedFile.size,
+              mimeType: normalizedFile.type,
+              contentBase64: await fileToBase64(normalizedFile),
+              previewContentBase64: previewFile ? await fileToBase64(previewFile) : undefined,
+              metadata: [
+                kind === "Image" ? "converted to webp" : kind === "Video" ? "converted to webm" : "converted to ogg",
+                originalFile.type || "unknown mime",
+              ],
+            }),
+          });
+          if (!response.ok) throw new Error(`Could not upload ${originalFile.name}`);
+        } finally {
+          stopProcessingProgress();
+        }
         savedCount += 1;
         completedSteps += 1;
       }
