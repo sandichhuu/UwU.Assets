@@ -32,6 +32,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/sonner";
 import { toast as showToast } from "sonner";
+import uwuLogo from "./assets/uwu.webp";
 import "./index.css";
 
 type AssetKind = "Image" | "Audio" | "Video";
@@ -120,6 +121,10 @@ const emptyAssets = (): Record<AssetKind, Asset[]> => ({ Image: [], Audio: [], V
 const supportedImageExtensions = new Set(["png", "svg", "jpg", "jpeg", "webp"]);
 const imageUploadAccept = ".png,.svg,.jpg,.jpeg,.webp,image/png,image/svg+xml,image/jpeg,image/webp";
 let uploadTimestampCounter = 0;
+
+function BrandMark() {
+  return <img className="brand-mark" src={uwuLogo} alt="UwU Assets" />;
+}
 
 function emptyProject(id: string, name: string): Project {
   return { id, name, assets: emptyAssets(), audioLocalization: [], textLocalization: [] };
@@ -902,7 +907,7 @@ export function App() {
     return (
       <main className="auth-screen">
         <div className="auth-card">
-          <div className="brand-mark">UwU</div>
+          <BrandMark />
           <h1>Loading account</h1>
         </div>
         <Toaster position="top-right" richColors closeButton />
@@ -927,7 +932,7 @@ export function App() {
       <main className="asset-app">
         <aside className="project-rail">
           <div className="brand-block">
-            <div className="brand-mark">UwU</div>
+            <BrandMark />
             <div>
               <p>Asset Console</p>
               <DiskStorageLabel storageUsage={storageUsage} />
@@ -1002,7 +1007,7 @@ export function App() {
     <main className={isSidebarOpen ? "asset-app" : "asset-app sidebar-collapsed"}>
       <aside className="project-rail">
         <div className="brand-block">
-          <div className="brand-mark">UwU</div>
+          <BrandMark />
           <div>
             <p>Asset Console</p>
             <DiskStorageLabel storageUsage={storageUsage} />
@@ -1184,7 +1189,7 @@ function AuthPage({ user, onAuthenticated }: { user: AuthUser | null; onAuthenti
     <main className="auth-screen">
       <form className="auth-card" onSubmit={onSubmit}>
         <div className="auth-brand-row">
-          <div className="brand-mark">UwU</div>
+          <BrandMark />
           <div>
             <p>Asset Console</p>
             <span>{requiresPasswordChange ? "First login password update" : "Account login"}</span>

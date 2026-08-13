@@ -59,6 +59,8 @@ const localizationKinds = new Set<LocalizationKind>(["audioLocalization", "textL
 const assetStoragePathEnvName = "ASSET_STORAGE_PATH";
 const configuredAssetStoragePath = Bun.env[assetStoragePathEnvName]?.trim();
 const defaultAssetPageSize = 50;
+const defaultImageAssetPath = join(import.meta.dir, "assets", "uwu.webp");
+const imageAssetExtensions = new Set(["png", "svg", "jpg", "jpeg", "webp"]);
 let uploadTimestampCounter = 0;
 
 if (!configuredAssetStoragePath) {
@@ -105,6 +107,22 @@ function defaultAssetName(kind: AssetKind) {
 
 function isSafeAssetName(name: string) {
   return name === name.replaceAll("\\", "/").split("/").pop();
+}
+
+function isImageAssetName(name: string) {
+  const extension = name.split(".").pop()?.toLowerCase();
+  return Boolean(extension && imageAssetExtensions.has(extension));
+}
+
+function defaultImageResponse() {
+  const file = Bun.file(defaultImageAssetPath);
+  return new Response(file, {
+    headers: {
+      "Content-Type": "image/webp",
+      "Content-Disposition": 'inline; filename="uwu.webp"',
+      "Cache-Control": "public, max-age=0, must-revalidate",
+    },
+  });
 }
 
 function fileSize(path: string) {
@@ -308,7 +326,10 @@ function assetPageParams(req: Request) {
 
 async function assetResponse(req: Request, mode: "id" | "name", key: string) {
   const asset = mode === "id" ? getAssetByKey(key) ?? getAssetById(key) : getAssetByName(key);
-  if (!asset) return Response.json({ error: "Asset not found" }, { status: 404 });
+  if (!asset) {
+    if (mode === "name" && isImageAssetName(key)) return defaultImageResponse();
+    return Response.json({ error: "Asset not found" }, { status: 404 });
+  }
 
   const token = new URL(req.url).searchParams.get("token");
   const settings = getProjectSettings(asset.projectId);
@@ -337,6 +358,7 @@ async function assetResponse(req: Request, mode: "id" | "name", key: string) {
   }
   const file = Bun.file(shouldServePreview ? assetPreviewFilePath(asset.name) : assetFilePath(asset.name));
   if (!(await file.exists())) {
+    if (asset.kind === "Image") return defaultImageResponse();
     return Response.json({ error: "Asset file not found" }, { status: 404 });
   }
 

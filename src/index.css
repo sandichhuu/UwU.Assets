@@ -118,14 +118,11 @@
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
   width: 42px;
   height: 42px;
   border-radius: 8px;
   background: hsl(0 0% 100%);
-  color: hsl(207 100% 45%);
-  font-weight: 800;
+  object-fit: cover;
   box-shadow: 0 10px 24px hsl(211 90% 28% / 28%);
 }
 
