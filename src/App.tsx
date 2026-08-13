@@ -1136,6 +1136,7 @@ function AuthPage({ user, onAuthenticated }: { user: AuthUser | null; onAuthenti
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const passwordMismatch = Boolean(newPassword && confirmPassword && newPassword !== confirmPassword);
 
   const submitLogin = async () => {
     const response = await fetch("/api/auth/login", {
@@ -1200,6 +1201,7 @@ function AuthPage({ user, onAuthenticated }: { user: AuthUser | null; onAuthenti
             <label>Current password<Input autoFocus type="password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} /></label>
             <label>New password<Input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} minLength={8} /></label>
             <label>Confirm password<Input type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} minLength={8} /></label>
+            {passwordMismatch && <p className="form-warning" role="alert">Password confirmation does not match.</p>}
           </>
         ) : (
           <>
@@ -1660,12 +1662,15 @@ function AddAccountModal({ newAccountForm, onClose, onCreateAccount, onNewAccoun
 }
 
 function ChangePasswordModal({ target, form, onClose, onFormChange, onSubmit }: { target: AuthUser; form: { newPassword: string; confirmPassword: string }; onClose: () => void; onFormChange: Dispatch<SetStateAction<{ newPassword: string; confirmPassword: string }>>; onSubmit: () => void }) {
+  const passwordMismatch = Boolean(form.newPassword && form.confirmPassword && form.newPassword !== form.confirmPassword);
+
   return (
     <div className="modal-backdrop" role="presentation">
       <form className="project-modal account-modal" role="dialog" aria-modal="true" aria-label={`Change password for ${target.username}`} onSubmit={event => { event.preventDefault(); void onSubmit(); }}>
         <div><h2>Change Password</h2><p>{target.username} · {target.role}</p></div>
         <label>New password<Input autoFocus type="password" minLength={8} value={form.newPassword} onChange={event => onFormChange(current => ({ ...current, newPassword: event.target.value }))} /></label>
         <label>Confirm password<Input type="password" minLength={8} value={form.confirmPassword} onChange={event => onFormChange(current => ({ ...current, confirmPassword: event.target.value }))} /></label>
+        {passwordMismatch && <p className="form-warning" role="alert">Password confirmation does not match.</p>}
         <div className="modal-actions"><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit">Change Password</Button></div>
       </form>
     </div>

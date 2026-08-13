@@ -52,6 +52,7 @@ export function getDatabase() {
   database.run(schema);
   ensureAssetConversionColumns(database);
   ensureAuthTables(database);
+  ensureLoginIpLockTable(database);
   ensureUserColumns(database);
 
   return database;
@@ -121,6 +122,18 @@ function ensureAuthTables(db: Database) {
     );
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);");
+}
+
+function ensureLoginIpLockTable(db: Database) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS login_ip_locks (
+      ip_address TEXT PRIMARY KEY,
+      failed_attempts INTEGER NOT NULL DEFAULT 0,
+      locked_until TEXT,
+      last_failed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
 }
 
 export function isFirstDatabaseLaunch() {

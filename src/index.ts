@@ -31,14 +31,17 @@ import {
 import {
   createSession,
   createUser,
+  clearLoginIpLock,
   deleteUser,
   deleteSession,
   ensureDefaultAdminUser,
+  getLoginIpLock,
   getUserById,
   getUserByApiToken,
   getSessionUser,
   listUsers,
   regenerateUserApiToken,
+  recordFailedLoginIp,
   updateUserEnabled,
   updateUserPassword,
   type AuthUser,
@@ -151,6 +154,21 @@ function sessionCookie(sessionId: string, maxAgeSeconds = 60 * 60 * 24 * 7) {
 
 function clearSessionCookie() {
   return sessionCookie("", 0);
+}
+
+function requestIp(req: Request) {
+  const forwardedFor = req.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim();
+  return req.headers.get("cf-connecting-ip")?.trim() || req.headers.get("x-real-ip")?.trim() || forwardedFor || "unknown";
+}
+
+function lockedLoginResponse(lock: { lockedUntil: string }) {
+  return Response.json(
+    {
+      error: "Too many failed login attempts from this IP. Try again in 1 hour.",
+      lockedUntil: lock.lockedUntil,
+    },
+    { status: 429 },
+  );
 }
 
 function currentUser(req: Request) {
@@ -365,12 +383,21 @@ const server = serve({
 
     "/api/auth/login": {
       async POST(req) {
+        const ipAddress = requestIp(req);
+        const activeLock = getLoginIpLock(ipAddress);
+        if (activeLock) return lockedLoginResponse(activeLock);
+
         const body = (await req.json()) as { username?: string; password?: string };
         const username = body.username?.trim() ?? "";
         const password = body.password ?? "";
         const user = await verifyUserPassword(username, password);
-        if (!user) return Response.json({ error: "Invalid username or password" }, { status: 401 });
+        if (!user) {
+          const lock = recordFailedLoginIp(ipAddress);
+          if (lock) return lockedLoginResponse(lock);
+          return Response.json({ error: "Invalid username or password" }, { status: 401 });
+        }
 
+        clearLoginIpLock(ipAddress);
         const sessionId = createSession(user.id);
         return Response.json(
           { user, token: user.apiToken },

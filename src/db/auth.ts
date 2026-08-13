@@ -32,6 +32,12 @@ type SessionRow = {
   must_change_password: number;
 };
 
+type LoginIpLockRow = {
+  ip_address: string;
+  failed_attempts: number;
+  locked_until: string | null;
+};
+
 const db = getDatabase();
 const sessionDays = 7;
 const defaultUsername = "admin";
@@ -118,6 +124,40 @@ const getUserByApiTokenQuery = db.query(`
   WHERE api_token = $apiToken
 `);
 
+const getLoginIpLockQuery = db.query(`
+  SELECT ip_address, failed_attempts, locked_until
+  FROM login_ip_locks
+  WHERE ip_address = $ipAddress
+`);
+
+const clearLoginIpLockQuery = db.query(`
+  DELETE FROM login_ip_locks
+  WHERE ip_address = $ipAddress
+`);
+
+const upsertFailedLoginIpQuery = db.query(`
+  INSERT INTO login_ip_locks (ip_address, failed_attempts, locked_until, last_failed_at, updated_at)
+  VALUES ($ipAddress, 1, NULL, datetime('now'), datetime('now'))
+  ON CONFLICT(ip_address) DO UPDATE SET
+    failed_attempts = CASE
+      WHEN login_ip_locks.locked_until IS NOT NULL AND login_ip_locks.locked_until > datetime('now') THEN login_ip_locks.failed_attempts
+      WHEN login_ip_locks.last_failed_at <= datetime('now', '-1 hour') THEN 1
+      ELSE login_ip_locks.failed_attempts + 1
+    END,
+    locked_until = CASE
+      WHEN login_ip_locks.locked_until IS NOT NULL AND login_ip_locks.locked_until > datetime('now') THEN login_ip_locks.locked_until
+      WHEN (
+        CASE
+          WHEN login_ip_locks.last_failed_at <= datetime('now', '-1 hour') THEN 1
+          ELSE login_ip_locks.failed_attempts + 1
+        END
+      ) >= 10 THEN datetime('now', '+1 hour')
+      ELSE NULL
+    END,
+    last_failed_at = datetime('now'),
+    updated_at = datetime('now')
+`);
+
 function createApiToken() {
   return `login_tok_${randomUUID().replaceAll("-", "")}`;
 }
@@ -190,6 +230,31 @@ export async function verifyUserPassword(username: string, password: string) {
   if (!row.enabled) return null;
   const valid = await Bun.password.verify(password, row.password_hash);
   return valid ? mapUser(row) : null;
+}
+
+export function getLoginIpLock(ipAddress: string) {
+  const row = getLoginIpLockQuery.get({ ipAddress }) as LoginIpLockRow | null;
+  if (!row?.locked_until) return null;
+
+  const lockedUntil = new Date(`${row.locked_until}Z`);
+  if (Number.isNaN(lockedUntil.getTime()) || lockedUntil <= new Date()) {
+    clearLoginIpLock(ipAddress);
+    return null;
+  }
+
+  return {
+    failedAttempts: row.failed_attempts,
+    lockedUntil: lockedUntil.toISOString(),
+  };
+}
+
+export function recordFailedLoginIp(ipAddress: string) {
+  upsertFailedLoginIpQuery.run({ ipAddress });
+  return getLoginIpLock(ipAddress);
+}
+
+export function clearLoginIpLock(ipAddress: string) {
+  clearLoginIpLockQuery.run({ ipAddress });
 }
 
 export async function updateUserPassword(userId: string, password: string) {

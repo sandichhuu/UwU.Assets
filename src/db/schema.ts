@@ -82,4 +82,12 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS login_ip_locks (
+  ip_address TEXT PRIMARY KEY,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  last_failed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;

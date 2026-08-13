@@ -80,6 +80,18 @@
   font-weight: 700;
 }
 
+.form-warning {
+  margin: -6px 0 0;
+  border: 1px solid hsl(38 92% 72%);
+  border-radius: 8px;
+  background: hsl(44 100% 96%);
+  color: hsl(28 82% 32%);
+  padding: 9px 11px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .project-rail {
   background:
     linear-gradient(180deg, hsl(207 100% 48%) 0%, hsl(211 92% 43%) 100%);
